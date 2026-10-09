@@ -20,7 +20,7 @@
 ## 3. 总体分层
 
 ```text
-ESP32-S3 / K230 / MF937 / Actuator
+ESP32-S3 / K230（唯一摄像头） / Orange Pi（主推理） / Actuator
               │
        MQTT 或 HTTP 接入适配器
               │ 统一契约、令牌、时间、序列校验
@@ -42,8 +42,8 @@ FastAPI API + SentinelHub
 ### 3.1 感知层
 
 - ESP32-S3 预留温度、湿度、光照和心跳能力。
-- K230 预留前置视觉检测、模型版本、归一化框、序列和心跳。
-- Orange Pi 3B 预留主视角 MF937、主视角检测和本地 FSM 网关能力。
+- K230 是唯一视觉采集节点，可上传板载辅助检测、模型版本、归一化框、序列和心跳。
+- Orange Pi 3B 承担来自 K230 图像的主 AI 推理和本地 FSM 网关能力。
 - 摄像头帧与检测元数据分开接入，平台只在两者能通过关联校验时绘制真实框。
 - 执行器节点预留声光、风扇和继电器反馈能力。
 
@@ -112,7 +112,7 @@ MQTT 适配器仅在 live 模式且配置 broker 时启动。它订阅遥测、�
 
 ### 4.2 检测
 
-检测必须说明 `device_id`、`camera_id`、`source_view`、`target`、`confidence`、归一化 `[x,y,width,height]`、`model_version`、`frame_id`、`event_time`、`sequence`、`boot_id` 和来源模式。`main` 只能来自 Orange Pi 主视角，`k230` 只能来自 K230 视角。
+检测必须说明 `device_id`、`camera_id`、`source_view`、`target`、`confidence`、归一化 `[x,y,width,height]`、`model_version`、`frame_id`、`event_time`、`sequence`、`boot_id` 和来源模式。新检测统一 `camera_id=k230-001`、`source_view=k230`，推理设备为 `orange-pi-001` 或 `k230-001`。状态机只采用新鲜的香橙派主推理且要求 K230 在线；同一摄像头的两份推理不算独立视觉证据。历史 `main` 记录只保留审计，不接受新的 `main` 输入。
 
 ### 4.3 视频
 

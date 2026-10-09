@@ -22,6 +22,8 @@ from .models import (
     Device,
     DeviceRegistration,
     EventRecord,
+    EventAction,
+    SafetySignal,
     Heartbeat,
     Overview,
     Quality,
@@ -188,6 +190,55 @@ def create_app(config: Settings | None = None) -> FastAPI:
     async def events(limit: int = Query(default=100, ge=1, le=1000), source_mode: SourceMode | None = None) -> list[EventRecord]:
         return [EventRecord.model_validate(row) for row in hub.db.list_json("events", limit, site_id=app_settings.site_id, source_mode=(source_mode or hub.source_mode).value)]
 
+    @app.post("/api/v1/ingest/anomalies", response_model=EventRecord, status_code=202)
+    async def ingest_anomaly(record: SafetySignal, x_device_token: str | None = Header(default=None)) -> EventRecord:
+        _require_token(x_device_token, app_settings.device_token, "device")
+        try:
+            return await hub.ingest_safety_signal(record, "anomaly")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/events/search")
+    async def search_events(
+        q: str = Query(default="", max_length=120),
+        severity: str = Query(default="all", pattern="^(all|info|warning|critical)$"),
+        acknowledgement: str = Query(default="all", pattern="^(all|pending|acknowledged)$"),
+        kind: str = Query(default="all", pattern="^(all|anomaly|industrial_alert|other)$"),
+        handling: str = Query(default="all", pattern="^(all|open|in_progress|pending_review|closed)$"),
+        sort: str = Query(default="recent", pattern="^(recent|priority)$"),
+        page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict:
+        result = hub.db.search_events(site_id=app_settings.site_id, source_mode=hub.source_mode.value,
+                                     q=q.strip(), severity=severity, acknowledgement=acknowledgement,
+                                     kind=kind, handling=handling, sort=sort, page=page, page_size=page_size)
+        result["items"] = [EventRecord.model_validate(item).model_dump(mode="json") for item in result["items"]]
+        return result
+
+    @app.post("/api/v1/events/{event_id}/actions", response_model=EventRecord)
+    async def event_action(event_id: str, action: EventAction,
+                           x_control_token: str | None = Header(default=None)) -> EventRecord:
+        _require_token(x_control_token, app_settings.control_token, "control")
+        try:
+            result = hub.db.act_on_event(event_id, action.model_dump(mode="json"),
+                                         app_settings.site_id, hub.source_mode.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=404, detail="Event not found")
+        record, changed = result
+        event = EventRecord.model_validate(record)
+        if changed:
+            await hub._publish({"type": "event_updated", "data": event.model_dump(mode="json")})
+        return event
+
+    @app.post("/api/v1/ingest/industrial-alerts", response_model=EventRecord, status_code=202)
+    async def ingest_industrial_alert(record: SafetySignal, x_device_token: str | None = Header(default=None)) -> EventRecord:
+        _require_token(x_device_token, app_settings.device_token, "device")
+        try:
+            return await hub.ingest_safety_signal(record, "industrial_alert")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post("/api/v1/events/{event_id}/acknowledge", response_model=EventRecord)
     async def acknowledge_event(
         event_id: str,
@@ -199,6 +250,13 @@ def create_app(config: Settings | None = None) -> FastAPI:
         if event is None:
             raise HTTPException(status_code=404, detail="Event not found")
         return event
+
+    @app.get("/api/v1/events/{event_id}", response_model=EventRecord)
+    async def event_detail(event_id: str) -> EventRecord:
+        record = hub.db.get_json_event("events", event_id)
+        if not record or record.get("site_id") != app_settings.site_id or record.get("source_mode") != hub.source_mode.value:
+            raise HTTPException(status_code=404, detail="Event not found")
+        return EventRecord.model_validate(record)
 
     @app.get("/api/v1/state/transitions", response_model=list[StateTransition])
     async def transitions(limit: int = Query(default=100, ge=1, le=1000), source_mode: SourceMode | None = None) -> list[StateTransition]:
@@ -290,7 +348,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/video/{view}/frame")
     async def video_frame(view: str, frame_id: str | None = None) -> Response:
-        if view not in {"main", "k230"}:
+        if view != "k230":
             raise HTTPException(status_code=404, detail="Unknown video channel")
         frame = hub.video.get(view, frame_id)
         if frame is None:

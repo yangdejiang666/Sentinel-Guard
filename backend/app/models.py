@@ -147,6 +147,8 @@ class VisionDetection(Contract):
     site_id: str = "demo-site"
     device_id: str
     camera_id: str
+    # "main" is read-only compatibility for immutable historical records.
+    # New ingestion rejects it; both processors use camera_id/source_view K230.
     source_view: Literal["main", "k230"]
     target: Literal["fire", "smoke", "person", "none"]
     confidence: float = Field(ge=0, le=1)
@@ -185,7 +187,7 @@ class Heartbeat(Contract):
 
 
 class VideoChannel(Contract):
-    source_view: Literal["main", "k230"]
+    source_view: Literal["k230"]
     device_id: str
     frame_id: str | None = None
     event_time: AwareDatetime | None = None
@@ -207,6 +209,15 @@ class CommandFeedback(Contract):
 
 class Acknowledgement(Contract):
     acknowledged_by: str = Field(default="operator", min_length=1, max_length=80)
+
+
+class EventAction(Contract):
+    action: Literal["claim", "note", "submit_review", "close", "reopen"]
+    actor: str = Field(min_length=1, max_length=80, pattern=r".*\S.*")
+    note: str = Field(min_length=1, max_length=1000, pattern=r".*\S.*")
+    evidence_ref: str = Field(default="", max_length=500)
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=1, max_length=128)
 
 
 class StateTransition(Contract):
@@ -240,6 +251,32 @@ class EventRecord(Contract):
     acknowledged_at: AwareDatetime | None = None
     correlation_id: str = Field(default_factory=lambda: f"corr-{uuid4().hex[:12]}")
     payload: dict[str, Any] = Field(default_factory=dict)
+    handling_status: Literal["open", "in_progress", "pending_review", "closed"] = "open"
+    assignee: str | None = None
+    revision: int = 0
+    handling_history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SafetySignal(Contract):
+    """External edge inference or safety-system finding, not an actuator command."""
+    event_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    site_id: str = Field(min_length=1, max_length=80)
+    source_device_id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    category: Literal[
+        "fire", "smoke", "person", "ppe_missing", "restricted_area",
+        "temperature", "humidity", "light", "equipment", "other",
+    ]
+    severity: Literal["info", "warning", "critical"]
+    title: str = Field(min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=500)
+    occurred_at: AwareDatetime
+    source_mode: SourceMode
+    quality: Quality
+    correlation_id: str = Field(min_length=1, max_length=128)
+    rule_id: str = Field(min_length=1, max_length=80)
+    model_version: str | None = Field(default=None, max_length=80)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class CommandRequest(Contract):

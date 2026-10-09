@@ -91,10 +91,10 @@ test('simulated bounding box is honestly labelled as metadata without video', as
 test('single-camera console assets are versioned and revalidated', async ({ page }) => {
   const response = await page.goto('/');
   expect(response.headers()['cache-control']).toBe('no-cache, must-revalidate');
-  await expect(page.locator('#console-build')).toHaveText('单摄像头控制台 · 20261009');
+  await expect(page.locator('#console-build')).toHaveText('单摄像头安全控制台 · 20261009');
   for (const selector of ['script[src]', 'link[rel="stylesheet"]']) {
     const path = await page.locator(selector).getAttribute(selector.startsWith('script') ? 'src' : 'href');
-    expect(path).toContain('v=single-camera-20261009');
+    expect(path).toContain('v=safety-events-20261009');
     const asset = await page.request.get(path);
     expect(asset.status()).toBe(200);
     expect(asset.headers()['cache-control']).toBe('no-cache, must-revalidate');
@@ -178,6 +178,112 @@ test('event acknowledgement remains synchronized through refresh and audit views
   await expect(page.locator(`#all-events [data-ack-event="${eventId}"]`)).toHaveCount(0);
   const events = await (await page.request.get('/api/v1/events?limit=100')).json();
   expect(events.find((event) => event.event_id === eventId).acknowledged).toBeTruthy();
+});
+
+test('event workbench filters evidence and acknowledges without clearing safety risk', async ({ page }) => {
+  await openDashboard(page);
+  await configureToken(page);
+  const signal = {
+    event_id: `safety-${randomUUID()}`, site_id: 'e2e-site', source_device_id: 'orange-pi-001',
+    category: 'ppe_missing', severity: 'critical', title: '防护装备缺失待复核',
+    message: '来自单路 K230 的香橙派推理结果', occurred_at: new Date().toISOString(),
+    source_mode: 'simulated', quality: 'simulated', correlation_id: `corr-${randomUUID()}`,
+    rule_id: 'ppe-v1', model_version: 'orange-edge-v1', confidence: 0.89,
+    evidence: { camera_id: 'k230-001', frame_id: 'frame-001' },
+  };
+  const created = await page.request.post('/api/v1/ingest/industrial-alerts', {
+    headers: { 'X-Device-Token': 'e2e-device-secret' }, data: signal,
+  });
+  expect(created.status()).toBe(202);
+  await page.locator('[data-page="events"]').click();
+  await page.locator('#event-kind').selectOption('industrial_alert');
+  await page.locator('#event-filter').selectOption('critical');
+  await page.locator('#event-status').selectOption('pending');
+  await page.locator('#event-search').fill('ppe-v1');
+  await expect(page.locator('#all-events .timeline-item')).toHaveCount(1);
+  await page.locator('#all-events .event-details summary').click();
+  await expect(page.locator('#all-events')).toContainText('k230-001');
+  await expect(page.locator('#all-events')).toContainText('orange-pi-001');
+  await page.locator('#event-sort').selectOption('priority');
+  await expect(page.locator('#all-events .event-details')).toHaveAttribute('open', '');
+  const acknowledgement = page.waitForResponse((response) => response.url().includes(`/events/${signal.event_id}/acknowledge`));
+  await page.locator('#all-events [data-ack-event]').click();
+  expect((await acknowledgement).status()).toBe(200);
+  await expect(page.locator('#all-events .timeline-item')).toHaveCount(0);
+  await page.locator('#event-status').selectOption('acknowledged');
+  await expect(page.locator('#all-events')).toContainText('已确认 · 非解除');
+  const detail = await (await page.request.get(`/api/v1/events/${signal.event_id}`)).json();
+  expect(detail.acknowledged_by).toBe('dashboard-operator');
+  expect(detail.payload.evidence.camera_id).toBe('k230-001');
+});
+
+test('event workflow records claim, review, close evidence, and reopen', async ({ page }) => {
+  await openDashboard(page);
+  await configureToken(page);
+  const signal = {
+    event_id: `workflow-${randomUUID()}`, site_id: 'e2e-site', source_device_id: 'orange-pi-001',
+    category: 'equipment', severity: 'warning', title: '设备异常处置测试',
+    message: '仅验证事件工作流', occurred_at: new Date().toISOString(),
+    source_mode: 'simulated', quality: 'simulated', correlation_id: `corr-${randomUUID()}`,
+    rule_id: 'workflow-e2e-v1', evidence: { camera_id: 'k230-001' },
+  };
+  expect((await page.request.post('/api/v1/ingest/industrial-alerts', {
+    headers: { 'X-Device-Token': 'e2e-device-secret' }, data: signal,
+  })).status()).toBe(202);
+  await page.locator('[data-page="events"]').click();
+  await page.locator('#event-search').fill('workflow-e2e-v1');
+  await expect(page.locator('#all-events .timeline-item')).toHaveCount(1);
+  await page.locator('#all-events .event-details summary').click();
+  await page.locator(`#all-events [data-event-action="claim"][data-event-id="${signal.event_id}"]`).click();
+  await page.locator('#event-action-actor').fill('handler');
+  await page.locator('#event-action-note').fill('已到现场确认');
+  await page.locator('#event-action-submit').click();
+  await expect(page.locator('#all-events')).toContainText('处理中');
+  await page.locator(`#all-events [data-event-action="submit_review"][data-event-id="${signal.event_id}"]`).click();
+  await page.locator('#event-action-actor').fill('handler');
+  await page.locator('#event-action-note').fill('提交独立复核');
+  await page.locator('#event-action-submit').click();
+  await expect(page.locator('#all-events')).toContainText('待复核');
+  await page.locator(`#all-events [data-event-action="close"][data-event-id="${signal.event_id}"]`).click();
+  await page.locator('#event-action-actor').fill('reviewer');
+  await page.locator('#event-action-note').fill('现场复核完成');
+  await page.locator('#event-action-evidence').fill('field-review-e2e-1');
+  await page.locator('#event-action-submit').click();
+  await expect(page.locator('#all-events')).toContainText('已关闭');
+  const detail = await (await page.request.get(`/api/v1/events/${signal.event_id}`)).json();
+  expect(detail.handling_status).toBe('closed');
+  expect(detail.handling_history).toHaveLength(3);
+  await page.locator(`#all-events [data-event-action="reopen"][data-event-id="${signal.event_id}"]`).click();
+  await page.locator('#event-action-actor').fill('handler');
+  await page.locator('#event-action-note').fill('新证据要求重开');
+  await page.locator('#event-action-submit').click();
+  await expect(page.locator('#all-events')).toContainText('待认领');
+});
+
+test('event workbench pages server history and resets page when filters change', async ({ page }) => {
+  await openDashboard(page);
+  const marker = `pagination-${randomUUID()}`;
+  const responses = await Promise.all(Array.from({ length: 23 }, (_, index) => page.request.post('/api/v1/ingest/anomalies', {
+    headers: { 'X-Device-Token': 'e2e-device-secret' },
+    data: {
+      event_id: `${marker}-${index}`, site_id: 'e2e-site', source_device_id: 'orange-pi-001',
+      category: 'other', severity: index === 0 ? 'critical' : 'info', title: `分页测试 ${index}`,
+      message: '测试历史查询', occurred_at: new Date().toISOString(), source_mode: 'simulated',
+      quality: 'simulated', correlation_id: marker, rule_id: marker,
+    },
+  })));
+  expect(responses.every((response) => response.status() === 202)).toBeTruthy();
+  await page.locator('[data-page="events"]').click();
+  await page.locator('#event-search').fill(marker);
+  await expect(page.locator('#event-result-count')).toContainText('匹配 23 条');
+  await expect(page.locator('#all-events .timeline-item')).toHaveCount(20);
+  await page.locator('#events-next').click();
+  await expect(page.locator('#events-page')).toHaveText('第 2 / 2 页');
+  await expect(page.locator('#all-events .timeline-item')).toHaveCount(3);
+  await page.locator('#event-filter').selectOption('critical');
+  await expect(page.locator('#events-page')).toHaveText('第 1 / 1 页');
+  await expect(page.locator('#all-events .timeline-item')).toHaveCount(1);
+  await expect(page.locator('#events-next')).toBeDisabled();
 });
 
 test('history can query raw values, units, source mode, device, and timestamps', async ({ page }) => {

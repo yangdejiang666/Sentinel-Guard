@@ -52,29 +52,29 @@ def test_sent_feedback_terminal_guard_and_timeout(live_settings):
 
 def test_video_identity_content_order_and_cache(live_client, device_headers):
     now = datetime.now(timezone.utc)
-    params = {"device_id": "camera-main-001", "frame_id": "frame-1", "event_time": now.isoformat(), "source_mode": "live"}
+    params = {"device_id": "k230-001", "frame_id": "frame-1", "event_time": now.isoformat(), "source_mode": "live"}
     headers = {**device_headers, "Content-Type": "image/jpeg"}
     jpeg = b"\xff\xd8\xff\xd9"
-    post = lambda content=jpeg, query=params, hdr=headers: live_client.post("/api/v1/ingest/video/main", params=query, content=content, headers=hdr)
+    post = lambda content=jpeg, query=params, hdr=headers: live_client.post("/api/v1/ingest/video/k230", params=query, content=content, headers=hdr)
     assert post().json()["inserted"] is True
     assert post().json()["inserted"] is False
     assert post(b"\xff\xd8\x01\xff\xd9").status_code == 422
     assert post(query={**params, "frame_id": "older", "event_time": (now - timedelta(seconds=1)).isoformat()}).status_code == 422
     assert post(hdr=device_headers).status_code == 415
     assert post(b"not-a-jpeg", query={**params, "frame_id": "bad"}).status_code == 422
-    frame = live_client.get("/api/v1/video/main/frame", params={"frame_id": "frame-1"})
+    frame = live_client.get("/api/v1/video/k230/frame", params={"frame_id": "frame-1"})
     assert frame.status_code == 200 and frame.content == jpeg
     assert frame.headers["cache-control"].startswith("no-store")
     channels = live_client.get("/api/v1/video/channels").json()
-    assert next(item for item in channels if item["source_view"] == "main")["status"] == "fresh"
+    assert next(item for item in channels if item["source_view"] == "k230")["status"] == "fresh"
 
 
 def test_video_store_is_bounded_and_marks_stale():
     store = VideoStore(5)
     now = datetime.now(timezone.utc)
     for i in range(10):
-        store.put(Frame("main", "camera-main-001", str(i), b"test", now + timedelta(milliseconds=i), now, SourceMode.live))
-    assert len(store.frames["main"]) == 6 and store.get("main").frame_id == "9"
+        store.put(Frame("k230", "k230-001", str(i), b"test", now + timedelta(milliseconds=i), now, SourceMode.live))
+    assert len(store.frames["k230"]) == 6 and store.get("k230").frame_id == "9"
     assert store.channels(now + timedelta(seconds=6), SourceMode.live)[0].status == "stale"
 
 

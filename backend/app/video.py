@@ -23,7 +23,7 @@ class VideoStore:
     """Bounded preview frames; video is never silently persisted or uploaded."""
     def __init__(self, stale_after_seconds: int):
         self.stale_after_seconds = stale_after_seconds
-        self.frames: dict[str, OrderedDict[str, Frame]] = {"main": OrderedDict(), "k230": OrderedDict()}
+        self.frames: dict[str, OrderedDict[str, Frame]] = {"k230": OrderedDict()}
 
     def put(self, frame: Frame) -> bool:
         channel = self.frames[frame.view]
@@ -50,7 +50,7 @@ class VideoStore:
             frame = self.get(view)
             result.append(VideoChannel(
                 source_view=view,
-                device_id=frame.device_id if frame else ("camera-main-001" if view == "main" else "k230-001"),
+                device_id=frame.device_id if frame else "k230-001",
                 frame_id=frame.frame_id if frame else None,
                 event_time=frame.event_time if frame else None,
                 ingest_time=frame.ingest_time if frame else None,

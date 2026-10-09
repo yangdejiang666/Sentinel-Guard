@@ -56,7 +56,7 @@ Content-Type: application/json
 
 ### 2.2 K230 / Orange Pi 检测
 
-发送到 `POST /api/v1/ingest/detections`。K230 使用 `deviceId=k230-001`、`sourceView=k230`、`cameraId=k230-001`；Orange Pi 主视角使用 `deviceId=orange-pi-001`、`sourceView=main`、`cameraId=camera-main-001`。
+发送到 `POST /api/v1/ingest/detections`。K230 板载辅助推理使用 `deviceId=k230-001`；香橙派主 AI 推理使用 `deviceId=orange-pi-001`。二者均使用 `sourceView=k230`、`cameraId=k230-001`，且必须关联真实 K230 帧。主推理新鲜且 K230 心跳在线才参与 FSM 完整输入判定，不要求板载辅助推理。
 
 ```json
 {
@@ -98,7 +98,7 @@ Content-Type: application/json
 
 ### 2.4 视频帧
 
-发送到 `POST /api/v1/ingest/video/main` 或 `POST /api/v1/ingest/video/k230`，查询参数包括 `device_id`、`frame_id`、`event_time` 和 `source_mode=live`，请求体为 `image/jpeg`。单帧上限 2 MiB，服务端检查 JPEG 起止签名、来源设备、时间新鲜度和通道能力。帧只在内存中缓存最近窗口，不写入 SQLite。
+发送到唯一的 `POST /api/v1/ingest/video/k230`，查询参数包括 `device_id=k230-001`、`frame_id`、`event_time` 和 `source_mode=live`，请求体为 `image/jpeg`。单帧上限 2 MiB，服务端检查 JPEG 起止签名、来源设备、时间新鲜度和通道能力。帧只在内存中缓存最近窗口，不写入 SQLite。香橙派若代理传输，仍代表 K230 采集来源，不登记第二摄像头。
 
 检测中的 `frame_id` 必须与视频帧完全一致，才能在前端显示真实检测框。
 

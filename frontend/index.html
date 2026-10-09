@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f2f5f8" />
     <title>智卫 Sentinel · 边缘安全监测平台</title>
-    <link rel="stylesheet" href="/static/console.css?v=single-camera-20261009" />
+    <link rel="stylesheet" href="/static/console.css?v=safety-events-20261009" />
   </head>
   <body>
     <div class="app-shell">
@@ -32,7 +32,7 @@
             <span class="pulse-dot"></span>
             <div><small>边缘服务</small><strong id="edge-status">连接中</strong></div>
           </div>
-          <div class="build-info" id="console-build">单摄像头控制台 · 20261009</div>
+          <div class="build-info" id="console-build">单摄像头安全控制台 · 20261009</div>
         </div>
       </aside>
 
@@ -125,9 +125,41 @@
         </section>
 
         <section class="page" id="page-events">
-          <div class="section-intro"><div><h2>事件、告警与状态流转</h2><p>从感知、判断到执行回执的完整证据链，所有事件均保留数据来源和质量标记。</p></div><div class="filter-row"><select id="event-filter"><option value="all">全部级别</option><option value="critical">严重</option><option value="warning">警告</option><option value="info">信息</option></select><button class="secondary-button" id="refresh-events">刷新</button></div></div>
+          <div class="section-intro"><div><h2>事件处置与安全告警</h2><p>K230 唯一视觉采集 · 香橙派 AI 推理 · ESP32 环境感知。确认只表示人工已阅，不代表风险解除或硬件已执行。</p></div><button class="secondary-button" id="refresh-events">刷新事件</button></div>
           <div class="event-summary"><div><span>未确认</span><strong id="unacked-count">0</strong></div><div><span>严重事件</span><strong id="critical-count">0</strong></div><div><span>状态流转</span><strong id="transition-count">0</strong></div><div><span>控制回执</span><strong id="command-count">0</strong></div></div>
-          <article class="panel event-center"><div class="timeline expanded" id="all-events"><div class="empty-state">暂无事件</div></div></article>
+          <article class="panel event-center">
+            <div class="panel-heading"><div><span class="section-tag">SAFETY EVENT WORKBENCH</span><h2>事件工作台</h2></div><span class="info-badge" id="event-result-count">等待事件</span></div>
+            <div class="event-toolbar">
+              <label>搜索<input id="event-search" type="search" placeholder="标题、设备、规则或关联 ID" maxlength="120" /></label>
+              <label>告警等级<select id="event-filter"><option value="all">全部级别</option><option value="critical">严重</option><option value="warning">警告</option><option value="info">信息</option></select></label>
+              <label>处理状态<select id="event-status"><option value="all">全部状态</option><option value="pending">待确认</option><option value="acknowledged">已确认</option></select></label>
+              <label>处置阶段<select id="event-handling"><option value="all">全部阶段</option><option value="open">待认领</option><option value="in_progress">处理中</option><option value="pending_review">待复核</option><option value="closed">已关闭</option></select></label>
+              <label>事件类型<select id="event-kind"><option value="all">全部类型</option><option value="anomaly">异常识别</option><option value="industrial_alert">工业安全告警</option><option value="other">现有检测与系统事件</option></select></label>
+              <label>排序<select id="event-sort"><option value="recent">最新优先</option><option value="priority">严重且待确认优先</option></select></label>
+            </div>
+            <div class="event-workbench-note">工作台查询全部历史，摘要统计基于最近 100 条。历史质量不是当前有效输入；关闭工单不等于解除风险。操作人由共享令牌使用者声明，尚未接入企业身份认证。</div>
+            <div class="timeline expanded" id="all-events"><div class="empty-state">暂无事件</div></div>
+            <div class="event-pagination"><button id="events-prev" class="ack-button">上一页</button><span id="events-page">第 1 页</span><button id="events-next" class="ack-button">下一页</button></div>
+            <dialog id="event-action-dialog">
+              <form id="event-action-form">
+                <h2 id="event-action-title">记录处置</h2>
+                <p>只更新事件工单，不会解除风险或控制执行器。关闭须由不同的声明人复核。</p>
+                <label>操作人（声明）<input id="event-action-actor" required maxlength="80" /></label>
+                <label>处理 / 复核说明<textarea id="event-action-note" required maxlength="1000" rows="4"></textarea></label>
+                <label>证据引用（关闭必填）<input id="event-action-evidence" maxlength="500" placeholder="现场工单、证据档案 ID 等；请勿填写敏感信息" /></label>
+                <p id="event-action-error" role="alert"></p>
+                <div class="event-pagination"><button type="button" id="event-action-cancel" class="ack-button">取消</button><button type="submit" id="event-action-submit" class="ack-button">提交记录</button></div>
+              </form>
+            </dialog>
+          </article>
+          <article class="panel safety-interface-panel">
+            <div class="panel-heading"><div><span class="section-tag">EXTENSION CONTRACTS · v1</span><h2>异常识别与工业告警接入</h2></div><span class="info-badge">接口已预留 · 算法待接入</span></div>
+            <div class="safety-contract-grid">
+              <div><h3>异常点识别</h3><code>POST /api/v1/ingest/anomalies</code><p>接收香橙派推理或环境分析结果：置信度、模型版本、规则 ID 和证据。平台接收结果，不冒充已完成算法识别。</p></div>
+              <div><h3>工业安全告警</h3><code>POST /api/v1/ingest/industrial-alerts</code><p>扩展火烟、未佩戴防护装备、禁区入侵、设备异常等事件类别；保留已登记来源、发生时间与数据质量。</p></div>
+              <div><h3>详情与确认</h3><code>GET /api/v1/events/{event_id}</code><p>结构化证据供第三方安全平台读取；确认使用控制令牌，输入使用设备令牌。外部告警不会绕过执行器安全联锁。</p></div>
+            </div>
+          </article>
           <article class="panel table-panel"><div class="panel-heading"><div><span class="section-tag">FSM TRANSITION AUDIT</span><h2>状态流转与决策依据</h2></div><span class="info-badge">关联 ID 串联检测、决策与执行</span></div><div class="data-table-wrap"><table><thead><tr><th>时间</th><th>流转</th><th>视觉阈值</th><th>规则 / 来源</th><th>原因与证据</th><th>关联 ID</th></tr></thead><tbody id="transition-table"><tr><td colspan="6" class="table-empty">暂无状态流转</td></tr></tbody></table></div></article>
           <article class="panel table-panel"><div class="panel-heading"><div><span class="section-tag">COMMAND AUDIT</span><h2>执行请求与硬件回执</h2></div><span class="info-badge">未收到 completed 回执时不宣称硬件已动作</span></div><div class="data-table-wrap"><table><thead><tr><th>请求时间</th><th>命令</th><th>状态</th><th>来源</th><th>请求人</th><th>执行说明</th><th>命令 ID</th></tr></thead><tbody id="command-table"><tr><td colspan="7" class="table-empty">暂无命令</td></tr></tbody></table></div></article>
         </section>
@@ -174,6 +206,6 @@
       </main>
     </div>
     <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
-    <script src="/static/app.js?v=single-camera-20261009" defer></script>
+    <script src="/static/app.js?v=safety-events-20261009" defer></script>
   </body>
 </html>

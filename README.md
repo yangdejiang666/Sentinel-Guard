@@ -1,6 +1,6 @@
 # 智卫 Sentinel 本地安全监测平台
 
-这是按照项目申报书《智卫 Sentinel：基于异构双核边缘协同的多模态安全监测系统》搭建的可运行平台骨架。当前优先完成了“数据接入 → 数据质量判断 → 多模态状态机 → 实时推送 → 前端呈现 → 命令审计”的端到端链路，为 ESP32-S3、K230、Orange Pi 3B、MF937 摄像头和执行器保留了明确的接口边界。
+这是按照项目申报书《智卫 Sentinel：基于异构双核边缘协同的多模态安全监测系统》搭建的可运行平台骨架。当前完成“数据接入 → 数据质量判断 → 多模态状态机 → 实时推送 → 前端呈现 → 命令审计”的开发链路。硬件拓扑为 ESP32-S3 环境感知、唯一 K230 摄像头、Orange Pi 3B 主控与 AI 推理、执行器。两个推理来源不是两个摄像头。
 
 平台默认使用模拟模式启动。模拟链路用于开发和联调，不等同于真实硬件接入，也不能作为现场消防或工业安全结论。
 
@@ -82,13 +82,15 @@ uv run uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 | `/api/v1/ingest/telemetry` | ESP32 或扩展传感器接入 |
 | `/api/v1/ingest/detections` | K230 / Orange Pi 检测接入 |
 | `/api/v1/ingest/heartbeat` | 节点心跳接入 |
-| `/api/v1/ingest/video/{view}` | `main` / `k230` JPEG 帧接入 |
+| `/api/v1/ingest/video/k230` | 唯一 K230 JPEG 帧接入 |
 | `/api/v1/ingest/command-feedback` | 执行器回执接入 |
 | `/api/v1/video/channels` | 视频通道状态 |
 | `/api/v1/video/{view}/frame` | 最近有效 JPEG 帧 |
 | `/ws` | 浏览器实时事件流和权威快照 |
 
-统一数据契约、MQTT 主题和 curl 示例见 [docs/api-examples.md](docs/api-examples.md)。系统架构和数据质量原则见 [docs/architecture.md](docs/architecture.md)。接板步骤见 [docs/hardware-integration.md](docs/hardware-integration.md)。
+事件中心支持全量历史筛选分页和认领、处理记录、提交复核、关闭、重开。异常识别与工业告警接入、事务版本校验与身份边界见 [安全事件说明](docs/safety-events.md)。关闭事件不会解除 FSM 风险或驱动硬件。
+
+统一数据契约、MQTT 主题和 curl 示例见 [docs/api-examples.md](docs/api-examples.md)。系统架构和数据质量原则见 [docs/architecture.md](docs/architecture.md)。接板步骤见 [docs/hardware-integration.md](docs/hardware-integration.md)。香橙派对接见 [docs/orange-pi-integration.md](docs/orange-pi-integration.md)。
 
 ## 配置
 
@@ -117,7 +119,7 @@ SENTINEL_AUTO_ACTUATION=false
 - ESP32-S3 传感器固件尚未实现。
 - K230 的 NNCase/KPU 模型编译和部署尚未实现。
 - Orange Pi 的 RKNN-Toolkit2 模型部署和真实 NPU 推理尚未完成。
-- MF937 的真实视频采集、编码和持续帧率尚未验收。
+- K230 的真实视频采集、编码、持续帧率及向香橙派输送图像尚未验收。
 - GPIO adapter、继电器、电风扇、蜂鸣器和声光灯尚未完成现场联调。
 - `local_fallback_ready=false` 表示本地 GPIO 执行器适配器没有注册；本地命令发布接口不等于 GPIO 已硬连接。
 - 模拟命令不会驱动物理硬件；风扇输出仅为演示审计对象，不是认证消防处置设备。
@@ -147,8 +149,8 @@ Playwright 测试需要 `npm ci`、已安装的 Chromium 和对应系统依赖�
 
 1. 先以 live 模式接入 ESP32-S3 的温度、湿度、光照和心跳。
 2. 验证时间同步、`sequence`、`boot_id`、断线和恢复行为。
-3. 接入 K230 检测元数据，不接执行器；验证 `source_view`、`frame_id` 和置信度质量。
-4. 接入 MF937 或 K230 JPEG 预览，确认画面和检测结果同帧后再显示真实检测框。
+3. 接入 K230 采集心跳及香橙派主推理元数据，不接执行器；两者均使用 `source_view=k230`、`camera_id=k230-001`。K230 板载推理是辅助来源，不替代主推理。
+4. 接入唯一 K230 JPEG 预览，确认画面和检测结果同帧后再显示真实检测框。
 5. 接入执行器反馈，只允许 acknowledged/completed/failed 形成可审计状态。
 6. 完成硬件联锁、急停、保险、断电策略和现场验收后，才评估是否打开物理执行安全开关。
 

@@ -130,6 +130,29 @@ class Database:
                 "SELECT id FROM telemetry WHERE event_id = ?", (payload["event_id"],)
             ).fetchone()[0])
 
+    def insert_safety_event(self, payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Atomically persist an immutable finding, preserving any acknowledgement."""
+        ignored = {"id", "acknowledged", "acknowledged_by", "acknowledged_at",
+                   "handling_status", "assignee", "revision", "handling_history"}
+        with self._lock, self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, payload FROM events WHERE event_id = ?", (payload["event_id"],)
+            ).fetchone()
+            if row:
+                existing = json.loads(row["payload"])
+                if {key: value for key, value in existing.items() if key not in ignored} != {
+                    key: value for key, value in payload.items() if key not in ignored
+                }:
+                    raise ValueError("event_id conflicts with an existing event")
+                existing["id"] = row["id"]
+                return existing, False
+            cursor = conn.execute(
+                "INSERT INTO events (event_id, payload, occurred_at) VALUES (?, ?, ?)",
+                (payload["event_id"], json.dumps(payload, ensure_ascii=False), payload["occurred_at"]),
+            )
+            return {**payload, "id": int(cursor.lastrowid)}, True
+
     def insert_transition(self, payload: dict[str, Any], time_value: datetime) -> int:
         with self._lock, self.connect() as conn:
             cursor = conn.execute(
@@ -137,6 +160,91 @@ class Database:
                 (json.dumps(payload, ensure_ascii=False), dt_to_text(time_value)),
             )
             return int(cursor.lastrowid)
+
+    def act_on_event(self, event_id: str, action: dict[str, Any], site_id: str,
+                     source_mode: str) -> tuple[dict[str, Any], bool] | None:
+        """Serialize workflow updates across connections; retries never duplicate audit entries."""
+        with self._lock, self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT id, payload FROM events WHERE event_id = ?", (event_id,)).fetchone()
+            if not row:
+                return None
+            record = json.loads(row["payload"])
+            if record.get("site_id", "demo-site") != site_id or record.get("source_mode", "live") != source_mode:
+                return None
+            history = record.setdefault("handling_history", [])
+            for entry in history:
+                if entry["request_id"] == action["request_id"]:
+                    if any(entry.get(key) != value for key, value in action.items()):
+                        raise ValueError("request_id conflicts with an existing action")
+                    return {**record, "id": row["id"]}, False
+            if record.get("revision", 0) != action["expected_revision"]:
+                raise ValueError("event revision changed; reload before retry")
+            status = record.get("handling_status", "open")
+            allowed = {
+                "claim": {"open"}, "note": {"open", "in_progress", "pending_review"},
+                "submit_review": {"in_progress"}, "close": {"pending_review"}, "reopen": {"closed"},
+            }
+            operation = action["action"]
+            if status not in allowed[operation]:
+                raise ValueError(f"invalid event transition: {status} -> {operation}")
+            if operation in {"note", "submit_review"} and record.get("assignee") and action["actor"] != record["assignee"]:
+                raise ValueError("only the declared assignee can update this handling record")
+            if operation == "close":
+                if not action["evidence_ref"].strip():
+                    raise ValueError("closing requires a field review evidence reference")
+                if action["actor"] == record.get("assignee"):
+                    raise ValueError("reviewer must differ from the declared assignee")
+            statuses = {"claim": "in_progress", "submit_review": "pending_review", "close": "closed", "reopen": "open"}
+            record["handling_status"] = statuses.get(operation, status)
+            if operation == "claim":
+                record["assignee"] = action["actor"]
+            elif operation == "reopen":
+                record["assignee"] = None
+            record["revision"] = record.get("revision", 0) + 1
+            history.append({**action, "at": dt_to_text(datetime.now(timezone.utc)),
+                            "from_status": status, "to_status": record["handling_status"]})
+            conn.execute("UPDATE events SET payload = ? WHERE event_id = ?",
+                         (json.dumps(record, ensure_ascii=False), event_id))
+            return {**record, "id": row["id"]}, True
+
+    def search_events(self, *, site_id: str, source_mode: str, q: str = "",
+                      severity: str = "all", acknowledgement: str = "all",
+                      kind: str = "all", handling: str = "all", sort: str = "recent",
+                      page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        clauses = ["COALESCE(json_extract(payload, '$.site_id'), 'demo-site') = ?",
+                   "COALESCE(json_extract(payload, '$.source_mode'), 'live') = ?"]
+        params: list[Any] = [site_id, source_mode]
+        if q:
+            fields = ("title", "message", "source_device_id", "event_id", "correlation_id", "payload.rule_id")
+            clauses.append("(" + " OR ".join(f"instr(lower(COALESCE(json_extract(payload, '$.{field}'), '')), lower(?)) > 0" for field in fields) + ")")
+            params.extend([q] * len(fields))
+        for field, value in (("severity", severity), ("handling_status", handling)):
+            if value != "all":
+                clauses.append(f"COALESCE(json_extract(payload, '$.{field}'), 'open') = ?")
+                params.append(value)
+        if acknowledgement != "all":
+            clauses.append("COALESCE(json_extract(payload, '$.acknowledged'), 0) = ?")
+            params.append(int(acknowledgement == "acknowledged"))
+        if kind != "all":
+            if kind == "other":
+                clauses.append("json_extract(payload, '$.event_type') NOT IN ('anomaly', 'industrial_alert')")
+            else:
+                clauses.append("json_extract(payload, '$.event_type') = ?")
+                params.append(kind)
+        where = " AND ".join(clauses)
+        order = "occurred_at DESC, id DESC"
+        if sort == "priority":
+            order = """(CASE WHEN COALESCE(json_extract(payload, '$.acknowledged'), 0) = 0 THEN 10 ELSE 0 END +
+                CASE json_extract(payload, '$.severity') WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END) DESC, """ + order
+        with self._lock, self.connect() as conn:
+            conn.execute("BEGIN")
+            total = conn.execute(f"SELECT COUNT(*) FROM events WHERE {where}", params).fetchone()[0]
+            page = min(page, max(1, (total + page_size - 1) // page_size))
+            rows = conn.execute(f"SELECT id, payload FROM events WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+                                (*params, page_size, (page - 1) * page_size)).fetchall()
+        return {"items": [{**json.loads(row["payload"]), "id": row["id"]} for row in rows],
+                "total": total, "page": page, "page_size": page_size}
 
     def save_device(self, payload: dict[str, Any], updated_at: datetime) -> None:
         with self._lock, self.connect() as conn:
@@ -229,6 +337,7 @@ class Database:
 
     def acknowledge(self, event_id: str, operator: str, now: datetime) -> dict[str, Any] | None:
         with self._lock, self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT id, payload FROM events WHERE event_id = ?", (event_id,)).fetchone()
             if not row:
                 return None

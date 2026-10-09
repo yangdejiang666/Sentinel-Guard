@@ -30,7 +30,10 @@ def decide(
     """
     values = {key: record.value for key, record in environment.items()}
     temperature, humidity, light = (values.get(key) for key in ("temperature", "humidity", "light"))
-    by_view = {item.source_view: item for item in detections}
+    # Both processors may analyze the SAME K230 frame. They are not two cameras
+    # or independent confirmations. Only Orange Pi inference drives the policy.
+    detections = [item for item in detections if item.device_id == "orange-pi-001"
+                  and item.camera_id == "k230-001" and item.source_view == "k230"]
     threshold = rules.alert_vision_threshold if current in {BusinessState.alert, BusinessState.danger} else rules.normal_vision_threshold
     fire = max((item.confidence for item in detections if item.target == "fire"), default=0.0)
     smoke = max((item.confidence for item in detections if item.target == "smoke"), default=0.0)
@@ -39,11 +42,10 @@ def decide(
     rapid = temperature_rise is not None and temperature_rise >= rules.rapid_rise_per_minute
     environment_verified = temperature is not None and (temperature >= rules.danger_temperature or (warm and rapid))
     water_mist = humidity is not None and humidity >= rules.high_humidity and not warm and not rapid
-    dual_fire = sum(item.target == "fire" and item.confidence >= threshold for item in detections) >= 2
-    glare = light is not None and light >= rules.bright_light and not dual_fire and not environment_verified
+    glare = light is not None and light >= rules.bright_light and not environment_verified
     confirmed_fire = fire >= threshold and not glare
     effective_smoke = smoke if not water_mist else 0.0
-    complete = all(key in environment for key in ("temperature", "humidity", "light")) and {"main", "k230"} <= by_view.keys()
+    complete = all(key in environment for key in ("temperature", "humidity", "light")) and bool(detections)
 
     if confirmed_fire and environment_verified:
         target, reason = BusinessState.danger, "视觉火焰确诊 + 有效温度/升温率验证，满足双条件"

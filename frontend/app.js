@@ -22,6 +22,14 @@ const state = {
   lastRealtimeAt: 0,
   videoChannels: [],
   videoErrors: {},
+  pendingAcknowledgements: new Set(),
+  eventPage: null,
+  eventPageNumber: 1,
+  eventSearchSequence: 0,
+  eventSearchTimer: null,
+  eventActionDraft: null,
+  eventPageError: false,
+  eventPageLoading: false,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -33,7 +41,7 @@ const metricMeta = {
   light: { label: '光照', unit: 'lux', color: '#3166c4' },
 };
 
-// Legacy backend devices remain untouched; the console has one visual node.
+// Hide retired hardware in archived snapshots; the live backend has one camera.
 function consoleDevices(items = []) {
   return items.filter((device) => device.device_id !== 'camera-main-001' && device.node_type !== 'Camera').map((device) => ({
     ...device,
@@ -341,18 +349,32 @@ function renderDetectionTable(detections = []) {
 
 function eventItem(event) {
   const canAck = !event.acknowledged;
+  const pending = state.pendingAcknowledgements.has(event.event_id);
+  const kind = ({ anomaly: '异常识别', industrial_alert: '工业安全告警' })[event.event_type] || '系统事件';
+  const severity = ({ critical: '严重', warning: '警告', info: '信息' })[event.severity] || event.severity;
+  const details = state.page === 'events' ? `<details class="event-details" data-event-details="${escapeHtml(event.event_id)}"><summary>查看来源、规则与证据</summary><dl class="event-detail-grid">
+    <div><dt>事件 ID</dt><dd>${escapeHtml(event.event_id)}</dd></div><div><dt>来源设备</dt><dd>${escapeHtml(event.source_device_id || '系统服务')}</dd></div>
+    <div><dt>发生时间</dt><dd>${formatDate(event.occurred_at)} ${formatTime(event.occurred_at)}</dd></div><div><dt>关联 ID</dt><dd>${escapeHtml(event.correlation_id)}</dd></div>
+    <div><dt>规则 / 模型</dt><dd>${escapeHtml(event.payload?.rule_id || '--')} / ${escapeHtml(event.payload?.model_version || '--')}</dd></div>
+    <div><dt>确认记录</dt><dd>${event.acknowledged ? `${escapeHtml(event.acknowledged_by || '--')} · ${formatDate(event.acknowledged_at)} ${formatTime(event.acknowledged_at)}` : '尚未人工确认'}</dd></div>
+    <div><dt>处置阶段 / 责任人</dt><dd>${escapeHtml(({ open: '待认领', in_progress: '处理中', pending_review: '待复核', closed: '已关闭' })[event.handling_status || 'open'])} / ${escapeHtml(event.assignee || '--')}</dd></div>
+    </dl><pre>${escapeHtml(JSON.stringify({ evidence: event.payload || {}, handling_history: event.handling_history || [] }, null, 2))}</pre>
+    <div class="event-actions">${(({ open: ['claim', 'note'], in_progress: ['note', 'submit_review'], pending_review: ['note', 'close'], closed: ['reopen'] })[event.handling_status || 'open'] || []).map((action) => `<button class="ack-button" data-event-action="${action}" data-event-id="${escapeHtml(event.event_id)}">${({ claim: '认领事件', note: '添加处理记录', submit_review: '提交复核', close: '复核关闭', reopen: '重新打开' })[action]}</button>`).join('')}</div></details>` : '';
   return `<div class="timeline-item">
     <time class="timeline-time">${formatTime(event.occurred_at)}</time><i class="timeline-marker ${severityClass(event.severity)}"></i>
-    <div><div class="timeline-title">${escapeHtml(consoleText(event.title))}</div><div class="timeline-message">${escapeHtml(consoleText(event.message))}</div><div class="timeline-meta"><span class="quality ${qualityClass(event.quality)}">${qualityLabel(event.quality)}</span><span class="quality ${event.source_mode === 'simulated' ? 'simulated' : 'valid'}">${event.source_mode === 'simulated' ? '模拟来源' : '实时来源'}</span></div></div>
-    ${canAck ? `<button class="ack-button" data-ack-event="${escapeHtml(event.event_id)}">确认</button>` : '<span class="ack-button acknowledged">已确认</span>'}
+    <div><div class="timeline-title">${escapeHtml(consoleText(event.title))}</div><div class="timeline-message">${escapeHtml(consoleText(event.message))}</div><div class="timeline-meta"><span class="event-level ${severityClass(event.severity)}">${escapeHtml(severity)}</span><span class="event-kind">${kind}</span><span class="quality ${qualityClass(event.quality)}">${qualityLabel(event.quality)}</span><span class="quality ${event.source_mode === 'simulated' ? 'simulated' : 'unknown'}">${escapeHtml(sourceModeLabel(event.source_mode))}来源</span></div>${details}</div>
+    ${canAck ? `<button class="ack-button" data-ack-event="${escapeHtml(event.event_id)}" ${pending ? 'disabled' : ''}>${pending ? '确认中…' : '确认已阅'}</button>` : '<span class="ack-button acknowledged">已确认 · 非解除</span>'}
   </div>`;
 }
 
 function renderEvents(events = state.events, target = '#overview-events') {
   const node = $(target);
   if (!node) return;
+  const expanded = new Set($$('details[open][data-event-details]', node).map((detail) => detail.dataset.eventDetails));
   node.innerHTML = events.length ? events.slice(0, target === '#overview-events' ? 8 : 100).map(eventItem).join('') : '<div class="empty-state">暂无事件</div>';
+  $$('details[data-event-details]', node).forEach((detail) => { detail.open = expanded.has(detail.dataset.eventDetails); });
   $$("[data-ack-event]", node).forEach((button) => button.addEventListener('click', () => acknowledgeEvent(button.dataset.ackEvent)));
+  $$('[data-event-action]', node).forEach((button) => button.addEventListener('click', () => openEventAction(button.dataset.eventId, button.dataset.eventAction)));
 }
 
 function updateEventSummary() {
@@ -366,9 +388,105 @@ function updateEventSummary() {
 }
 
 function renderAllEvents() {
+  if (state.eventPageError) {
+    $('#event-result-count').textContent = '查询失败，请刷新重试';
+    $('#all-events').innerHTML = '<div class="empty-state">查询失败，当前筛选结果不可用。请点击刷新事件重试。</div>';
+    $('#events-prev').disabled = true; $('#events-next').disabled = true;
+    return;
+  }
+  if (state.eventPage) {
+    renderEvents(state.eventPage.items, '#all-events');
+    $('#event-result-count').textContent = `匹配 ${state.eventPage.total} 条 · 全量历史`;
+    $('#events-page').textContent = `第 ${state.eventPage.page} / ${Math.max(1, Math.ceil(state.eventPage.total / state.eventPage.page_size))} 页`;
+    $('#events-prev').disabled = state.eventPage.page <= 1;
+    $('#events-next').disabled = state.eventPage.page * state.eventPage.page_size >= state.eventPage.total;
+    if (state.eventPageLoading) {
+      $('#event-result-count').textContent = '查询中…（显示上次结果）';
+      $('#events-prev').disabled = true; $('#events-next').disabled = true;
+    }
+    return;
+  }
   const filter = $('#event-filter')?.value || 'all';
-  const filtered = filter === 'all' ? state.events : state.events.filter((event) => event.severity === filter);
+  const status = $('#event-status')?.value || 'all';
+  const kind = $('#event-kind')?.value || 'all';
+  const search = ($('#event-search')?.value || '').trim().toLowerCase();
+  const filtered = state.events.filter((event) =>
+    (filter === 'all' || event.severity === filter)
+    && (status === 'all' || event.acknowledged === (status === 'acknowledged'))
+    && (kind === 'all' || (kind === 'other' ? !['anomaly', 'industrial_alert'].includes(event.event_type) : event.event_type === kind))
+    && (!search || [consoleText(event.title), consoleText(event.message), event.source_device_id, event.event_id, event.correlation_id, event.payload?.rule_id].join(' ').toLowerCase().includes(search)));
+  if ($('#event-sort')?.value === 'priority') {
+    const score = (event) => (event.acknowledged ? 0 : 10) + ({ critical: 3, warning: 2, info: 1 })[event.severity];
+    filtered.sort((a, b) => score(b) - score(a) || new Date(b.occurred_at) - new Date(a.occurred_at));
+  } else filtered.sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at));
+  if ($('#event-result-count')) $('#event-result-count').textContent = `匹配 ${filtered.length} / 已加载 ${state.events.length}`;
   renderEvents(filtered, '#all-events');
+  if (!filtered.length) $('#all-events').innerHTML = '<div class="empty-state">没有匹配的事件，请调整搜索词或筛选条件。</div>';
+}
+
+async function loadEventPage(reset = false) {
+  if (reset) state.eventPageNumber = 1;
+  const sequence = ++state.eventSearchSequence;
+  state.eventPageLoading = true; state.eventPageError = false;
+  const params = new URLSearchParams({
+    q: $('#event-search')?.value.trim() || '', severity: $('#event-filter')?.value || 'all',
+    acknowledgement: $('#event-status')?.value || 'all', kind: $('#event-kind')?.value || 'all',
+    handling: $('#event-handling')?.value || 'all', sort: $('#event-sort')?.value || 'recent',
+    page: String(state.eventPageNumber), page_size: '20',
+  });
+  $('#event-result-count').textContent = '查询中…';
+  $('#events-prev').disabled = true; $('#events-next').disabled = true;
+  try {
+    const result = await api(`/api/v1/events/search?${params}`);
+    if (sequence !== state.eventSearchSequence) return;
+    state.eventPage = result; state.eventPageNumber = result.page; state.eventPageLoading = false; renderAllEvents();
+  } catch (error) {
+    if (sequence !== state.eventSearchSequence) return;
+    state.eventPageLoading = false; state.eventPageError = true; renderAllEvents();
+    showToast(error.message, 'error');
+  }
+}
+
+function scheduleEventPage(reset = false) {
+  clearTimeout(state.eventSearchTimer);
+  state.eventSearchTimer = setTimeout(() => loadEventPage(reset), 250);
+}
+
+function openEventAction(eventId, action) {
+  const event = state.eventPage?.items.find((item) => item.event_id === eventId) || state.events.find((item) => item.event_id === eventId);
+  if (!event) return;
+  state.eventActionDraft = { eventId, action, revision: event.revision || 0, requestId: crypto.randomUUID() };
+  $('#event-action-title').textContent = ({ claim: '认领事件', note: '添加处理记录', submit_review: '提交复核', close: '复核关闭', reopen: '重新打开' })[action];
+  $('#event-action-form').reset();
+  $('#event-action-evidence').required = action === 'close';
+  $('#event-action-error').textContent = '';
+  $('#event-action-dialog').showModal();
+}
+
+async function submitEventAction(event) {
+  event.preventDefault();
+  const draft = state.eventActionDraft;
+  if (!draft || $('#event-action-submit').disabled) return;
+  const actor = $('#event-action-actor').value.trim(), note = $('#event-action-note').value.trim();
+  if (!actor || !note) { $('#event-action-error').textContent = '操作人和说明不可为空。'; return; }
+  const evidenceRef = $('#event-action-evidence').value.trim();
+  const fingerprint = JSON.stringify({ actor, note, evidenceRef });
+  if (draft.fingerprint && draft.fingerprint !== fingerprint) draft.requestId = crypto.randomUUID();
+  draft.fingerprint = fingerprint;
+  $('#event-action-submit').disabled = true; $('#event-action-cancel').disabled = true;
+  try {
+    const result = await api(`/api/v1/events/${encodeURIComponent(draft.eventId)}/actions`, {
+      method: 'POST', headers: controlHeaders(), body: JSON.stringify({
+        action: draft.action, actor, note, evidence_ref: evidenceRef,
+        expected_revision: draft.revision, request_id: draft.requestId,
+      }),
+    });
+    state.events = sortAndLimit(mergeById(state.events, [result], 'event_id'), 'occurred_at');
+    $('#event-action-dialog').close(); state.eventActionDraft = null;
+    showToast('处置记录已保存；系统风险和执行器状态未改变'); await loadEventPage();
+  } catch (error) {
+    $('#event-action-error').textContent = `${error.message}；记录未确认成功，输入已保留。版本冲突请取消后刷新重试。`;
+  } finally { $('#event-action-submit').disabled = false; $('#event-action-cancel').disabled = false; }
 }
 
 function pushPoint(metric, record) {
@@ -388,7 +506,8 @@ function appendChartPoint(metric, point) {
 
 function pushDetectionPoint(item) {
   if (!inCurrentScope(item)) return;
-  appendChartPoint(`${item.source_view}_confidence`, { id: item.event_id, time: item.event_time, value: Number(item.confidence), quality: item.quality });
+  const series = item.device_id === 'orange-pi-001' ? 'main_confidence' : 'k230_confidence';
+  appendChartPoint(series, { id: item.event_id, time: item.event_time, value: Number(item.confidence), quality: item.quality });
 }
 
 function chartPointIsValid(point) {
@@ -554,6 +673,7 @@ async function resyncData(reason = '') {
     const overview = await api('/api/v1/overview');
     if (state.overview && (state.overview.site_id !== overview.site_id || state.overview.simulation_mode !== overview.simulation_mode)) {
       state.events = []; state.detections = []; state.transitions = []; state.commands = [];
+      state.eventPage = null; state.eventPageNumber = 1; state.eventSearchSequence++;
       Object.keys(state.chartPoints).forEach((key) => { state.chartPoints[key] = []; });
     }
     state.events = sortAndLimit(mergeById(state.events, events, 'event_id'), 'occurred_at');
@@ -572,6 +692,7 @@ async function resyncData(reason = '') {
     redrawLiveChart(); updateTokenStatus();
     $('#heartbeat-threshold').textContent = config.heartbeat_timeout_seconds;
     state.needsResync = false;
+    if (state.page === 'events') scheduleEventPage();
     if (reason) showToast('实时数据与审计记录已重新同步');
   })().catch((error) => {
     state.needsResync = true;
@@ -657,7 +778,15 @@ function mergeById(items, additions, key) {
   const map = new Map(items.map((item) => [item[key], item]));
   additions.forEach((item) => {
     const previous = map.get(item[key]);
-    if (previous?.acknowledged && item.acknowledged === false) return;
+    if (key === 'event_id' && previous) {
+      if ((previous.revision || 0) > (item.revision || 0)) {
+        item = { ...previous, acknowledged: previous.acknowledged || item.acknowledged,
+          acknowledged_by: previous.acknowledged_by || item.acknowledged_by,
+          acknowledged_at: previous.acknowledged_at || item.acknowledged_at };
+      } else if (previous.acknowledged && !item.acknowledged) {
+        item = { ...item, acknowledged: true, acknowledged_by: previous.acknowledged_by, acknowledged_at: previous.acknowledged_at };
+      }
+    }
     if (key === 'command_id' && previous) {
       const previousAt = previous.status_history?.at(-1)?.at || previous.requested_at;
       const nextAt = item.status_history?.at(-1)?.at || item.requested_at;
@@ -697,8 +826,8 @@ function handleRealtime(message) {
   }
   if (message.type === 'quality_issue') { showToast('收到重复或无效输入，已排除出实时决策', 'error'); return; }
   if (message.type === 'detection') { pushDetectionPoint(message.data); state.detections = sortAndLimit(mergeById(state.detections, [message.data], 'event_id'), 'event_time', 100); updateDetections(); redrawLiveChart(); return; }
-  if (message.type === 'event') { state.events = mergeById(state.events, [message.data], 'event_id').sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at)); renderEvents(); renderAllEvents(); updateEventSummary(); if (message.data.severity === 'critical') showToast(message.data.title, 'critical'); return; }
-  if (message.type === 'event_acknowledged') { state.events = state.events.map((event) => event.event_id === message.data.event_id ? message.data : event); renderEvents(); renderAllEvents(); updateEventSummary(); return; }
+  if (message.type === 'event') { state.events = sortAndLimit(mergeById(state.events, [message.data], 'event_id'), 'occurred_at'); renderEvents(); renderAllEvents(); updateEventSummary(); if (state.page === 'events') scheduleEventPage(); if (message.data.severity === 'critical') showToast(message.data.title, 'critical'); return; }
+  if (['event_acknowledged', 'event_updated'].includes(message.type)) { state.events = sortAndLimit(mergeById(state.events, [message.data], 'event_id'), 'occurred_at'); renderEvents(); renderAllEvents(); updateEventSummary(); if (state.page === 'events') scheduleEventPage(); return; }
   if (message.type === 'state_transition') { state.transitions = sortAndLimit(mergeById(state.transitions, [message.data], 'correlation_id'), 'occurred_at'); if (state.overview) { Object.assign(state.overview, { current_state: message.data.to_state, state_since: message.data.occurred_at, state_reason: message.data.reason, state_evidence: message.data.evidence, vision_threshold: message.data.vision_threshold }); updateState(state.overview); renderConfig(); } appendChartPoint('vision_threshold', { time: message.data.occurred_at, value: Number(message.data.vision_threshold), quality: message.data.source_mode === 'simulated' ? 'simulated' : 'valid' }); renderTransitions(); updateEventSummary(); redrawLiveChart(); return; }
   if (message.type === 'command' || message.type === 'command_feedback') { state.commands = [message.data, ...state.commands.filter((item) => item.command_id !== message.data.command_id)].slice(0, 100); updateEventSummary(); renderCommands(); $('#last-command').textContent = `${message.data.command_type} · ${commandStatusLabel(message.data.status)} · ${message.data.execution_message || ''}`; return; }
   if (message.type === 'video') { updateVideoChannels(message.data); return; }
@@ -717,7 +846,16 @@ function connectWebSocket() {
 }
 
 async function acknowledgeEvent(eventId) {
-  try { const event = await api(`/api/v1/events/${encodeURIComponent(eventId)}/acknowledge`, { method: 'POST', headers: controlHeaders() }); state.events = sortAndLimit(mergeById(state.events, [event], 'event_id'), 'occurred_at'); renderAudit(); } catch (error) { showToast(`确认失败：${error.message}`, 'error'); }
+  if (state.pendingAcknowledgements.has(eventId)) return;
+  state.pendingAcknowledgements.add(eventId);
+  renderEvents(); renderAllEvents();
+  try {
+    const event = await api(`/api/v1/events/${encodeURIComponent(eventId)}/acknowledge`, { method: 'POST', headers: controlHeaders(), body: JSON.stringify({ acknowledged_by: 'dashboard-operator' }) });
+    state.events = sortAndLimit(mergeById(state.events, [event], 'event_id'), 'occurred_at');
+    if (state.page === 'events') await loadEventPage();
+    showToast('已记录人工确认；风险未被自动解除');
+  } catch (error) { showToast(`确认失败：${error.message}`, 'error'); }
+  finally { state.pendingAcknowledgements.delete(eventId); renderAudit(); }
 }
 
 async function sendCommand(commandType) {
@@ -737,15 +875,21 @@ function navigate(page) {
   $('.sidebar')?.classList.remove('open');
   redrawLiveChart(); renderFeedMetadata();
   if (page === 'history') loadHistory($('#history-metric')?.value || 'temperature');
-  if (page === 'events') renderAudit();
+  if (page === 'events') { renderAudit(); loadEventPage(); }
 }
 
 function bindEvents() {
   $$('.nav-item').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.page)));
   $$('[data-page-jump]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.pageJump)));
   $('#mobile-menu')?.addEventListener('click', () => $('.sidebar')?.classList.toggle('open'));
-  $('#event-filter')?.addEventListener('change', renderAllEvents);
-  $('#refresh-events')?.addEventListener('click', async () => { try { state.events = await api('/api/v1/events?limit=100'); renderEvents(); renderAllEvents(); updateEventSummary(); } catch (error) { showToast(error.message, 'error'); } });
+  ['#event-filter', '#event-status', '#event-kind', '#event-sort', '#event-handling'].forEach((selector) => $(selector)?.addEventListener('change', () => loadEventPage(true)));
+  $('#event-search')?.addEventListener('input', () => scheduleEventPage(true));
+  $('#refresh-events')?.addEventListener('click', () => loadEventPage());
+  $('#events-prev')?.addEventListener('click', () => { state.eventPageNumber--; loadEventPage(); });
+  $('#events-next')?.addEventListener('click', () => { state.eventPageNumber++; loadEventPage(); });
+  $('#event-action-form')?.addEventListener('submit', submitEventAction);
+  $('#event-action-cancel')?.addEventListener('click', () => { $('#event-action-dialog').close(); state.eventActionDraft = null; });
+  $('#event-action-dialog')?.addEventListener('cancel', (event) => { if ($('#event-action-submit').disabled) event.preventDefault(); });
   $('#refresh-history')?.addEventListener('click', () => loadHistory($('#history-metric').value));
   $('#history-metric')?.addEventListener('change', () => loadHistory($('#history-metric').value));
   $('#history-device')?.addEventListener('change', () => loadHistory($('#history-metric').value));

@@ -98,12 +98,12 @@ curl -i -X POST http://127.0.0.1:8000/api/v1/ingest/heartbeat \
 ## 6. JPEG 视频帧
 
 ```bash
-curl -i -X POST 'http://127.0.0.1:8000/api/v1/ingest/video/main?device_id=camera-main-001&frame_id=mf937-frame-100&event_time=2026-10-09T00%3A00%3A00.100Z&source_mode=live' \
+curl -i -X POST 'http://127.0.0.1:8000/api/v1/ingest/video/k230?device_id=k230-001&frame_id=k230-frame-100&event_time=2026-10-09T00%3A00%3A00.100Z&source_mode=live' \
   -H 'Content-Type: image/jpeg' \
   -H 'X-Device-Token: replace-with-device-token' \
   --data-binary @frame.jpg
 
-curl -s 'http://127.0.0.1:8000/api/v1/video/main/frame?frame_id=mf937-frame-100' -o frame-response.jpg
+curl -s 'http://127.0.0.1:8000/api/v1/video/k230/frame?frame_id=k230-frame-100' -o frame-response.jpg
 ```
 
 服务端会限制 JPEG 大小并检查签名；视频通道的 `frame_id` 必须和检测记录一致，前端才会绘制真实框。

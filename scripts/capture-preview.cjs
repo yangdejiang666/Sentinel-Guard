@@ -24,6 +24,10 @@ async function main() {
     await expect(page.locator('#monitor-feeds .camera-feed')).toHaveCount(1);
     await expect(page.locator('#console-build')).toContainText('20261009');
     await page.screenshot({ path: join(output, 'preview-desktop-monitor.png'), fullPage: true });
+    await page.locator('[data-page="events"]').click();
+    await expect(page.locator('#event-result-count')).toContainText('匹配');
+    await page.locator('#all-events details').first().evaluate((element) => { element.open = true; });
+    await page.screenshot({ path: join(output, 'preview-desktop-events.png'), fullPage: true });
     await page.locator('[data-page="overview"]').click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('.sidebar').evaluate((element) => element.classList.remove('open'));
@@ -35,8 +39,15 @@ async function main() {
     await page.waitForTimeout(350);
     await expect(page.locator('#monitor-mode-badge')).toContainText('视频未接入');
     await page.screenshot({ path: join(output, 'preview-mobile-monitor.png'), fullPage: true });
+    await page.locator('#mobile-menu').click();
+    await page.locator('[data-page="events"]').click();
+    await page.locator('.sidebar').evaluate((element) => element.classList.remove('open'));
+    await page.waitForTimeout(350);
+    await expect(page.locator('#event-search')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: join(output, 'preview-mobile-events.png'), fullPage: true });
     expect(errors, 'No page, resource, or CSP errors').toEqual([]);
-    console.log(JSON.stringify({ output, errors, captures: ['preview-desktop.png', 'preview-desktop-monitor.png', 'preview-mobile.png', 'preview-mobile-monitor.png'] }));
+    console.log(JSON.stringify({ output, errors, captures: ['preview-desktop.png', 'preview-desktop-monitor.png', 'preview-desktop-events.png', 'preview-mobile.png', 'preview-mobile-monitor.png', 'preview-mobile-events.png'] }));
   } finally {
     await browser.close();
   }

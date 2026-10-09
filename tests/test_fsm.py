@@ -16,7 +16,7 @@ def environment(temperature=23, humidity=45, light=180):
 def vision(view, target="none", confidence=0):
     return VisionDetection(
         device_id="orange-pi-001" if view == "main" else "k230-001",
-        camera_id="camera-main-001" if view == "main" else "k230-001", source_view=view,
+        camera_id="k230-001", source_view="k230",
         target=target, confidence=confidence, event_time=datetime.now(timezone.utc),
         sequence=1, model_version="test-model-1",
     )
@@ -53,6 +53,31 @@ def test_missing_inputs_cannot_clear_high_risk():
     result = decide(BusinessState.danger, {"temperature": environment()["temperature"]}, [], Rules(), datetime.now(timezone.utc))
     assert result.state == BusinessState.danger and not result.trusted
     assert "不能据此宣告恢复正常" in result.reason
+
+
+def test_k230_onboard_inference_is_not_primary_or_independent_vote():
+    now = datetime.now(timezone.utc)
+    result = decide(BusinessState.danger, environment(), [vision("k230")], Rules(), now)
+    assert result.state == BusinessState.danger and not result.trusted
+    glare = decide(BusinessState.normal, environment(light=20000),
+                   [vision("main", "fire", .95), vision("k230", "fire", .95)], Rules(), now)
+    assert glare.state == BusinessState.watch and glare.evidence["reflection_candidate"]
+
+
+def test_camera_offline_prevents_using_primary_inference(live_settings):
+    hub = SentinelHub(live_settings)
+    async def scenario():
+        record = vision("main")
+        record.site_id = "test-site"
+        await hub.ingest_detection(record)
+        assert not hub._fresh_and_usable(record, datetime.now(timezone.utc))
+        camera = vision("k230")
+        camera.site_id = "test-site"
+        await hub.ingest_detection(camera)
+        assert hub._fresh_and_usable(record, datetime.now(timezone.utc))
+        hub.devices["k230-001"].last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=30)
+        assert not hub._fresh_and_usable(record, datetime.now(timezone.utc))
+    asyncio.run(scenario())
 
 
 def test_recovery_requires_continuous_complete_inputs(live_settings):

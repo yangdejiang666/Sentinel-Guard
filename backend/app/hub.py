@@ -21,6 +21,7 @@ from .models import (
     DeviceRegistration,
     DeviceStatus,
     EventRecord,
+    SafetySignal,
     Heartbeat,
     NodeType,
     Overview,
@@ -118,10 +119,9 @@ class SentinelHub:
         offline = DeviceStatus.not_connected
         source = self.source_mode
         definitions = [
-            ("orange-pi-001", "Orange Pi 主控", NodeType.orange_pi, "local", ["fsm", "api", "gpio", "video-decode", "vision-detection", "heartbeat"]),
-            ("k230-001", "K230 视觉从节点", NodeType.k230, "MQTT", ["vision-detection", "video-k230", "heartbeat"]),
+            ("orange-pi-001", "Orange Pi 主控与 AI 推理", NodeType.orange_pi, "local", ["fsm", "api", "gpio", "video-decode", "vision-detection", "heartbeat"]),
+            ("k230-001", "K230 唯一视觉采集节点", NodeType.k230, "MQTT", ["vision-detection", "video-k230", "heartbeat"]),
             ("esp32-s3-001", "ESP32-S3 环境网关", NodeType.esp32, "MQTT", ["temperature", "humidity", "light", "heartbeat"]),
-            ("camera-main-001", "主摄像头 MF937", NodeType.camera, "USB / local stream", ["video-main", "vision-metadata"]),
             ("actuator-001", "声光与继电器执行组", NodeType.actuator, "GPIO / isolated relay", ["alarm", "fan", "execution-feedback"]),
         ]
         for device_id, name, node, protocol, capabilities in definitions:
@@ -140,13 +140,20 @@ class SentinelHub:
             )
         for payload in self.db.list_json("devices", 1000):
             device = Device.model_validate(payload)
-            if device.site_id == self.settings.site_id:
+            if device.site_id == self.settings.site_id and device.device_id != "camera-main-001" and device.node_type != NodeType.camera:
+                if device.device_id in self.devices:
+                    # Fixed hardware topology wins over obsolete stored definitions.
+                    device = self.devices[device.device_id]
                 self.devices[device.device_id] = device.model_copy(update={
                     "status": DeviceStatus.not_connected, "last_heartbeat": None,
                     "source_mode": self.source_mode, "health_message": "服务重启，等待新心跳",
                 })
 
     async def register_device(self, request: DeviceRegistration) -> Device:
+        if request.node_type == NodeType.camera or request.device_id == "camera-main-001" or any(
+            capability.startswith("video-") for capability in request.capabilities
+        ):
+            raise ValueError("this installation has one fixed K230 camera; additional video sources are not supported")
         if request.device_id in self.devices:
             raise ValueError("device_id already registered; existing devices are not overwritten")
         device = Device(**request.model_dump(), site_id=self.settings.site_id, source_mode=self.source_mode)
@@ -232,6 +239,8 @@ class SentinelHub:
             and record.quality == (Quality.simulated if self.settings.simulation_mode else Quality.valid)
             and record.source_mode == self.source_mode
             and self._freshness(self.devices[record.device_id], now).status == DeviceStatus.online
+            and (not isinstance(record, VisionDetection) or
+                 self._freshness(self.devices["k230-001"], now).status == DeviceStatus.online)
         )
 
     async def ingest_telemetry(self, record: TelemetryRecord) -> TelemetryRecord:
@@ -278,13 +287,10 @@ class SentinelHub:
         device = self._validate_source(detection.device_id, detection.source_mode, detection.site_id)
         if "vision-detection" not in device.capabilities or detection.camera_id not in self.devices:
             raise ValueError("vision capability/camera_id not registered")
-        if detection.source_view == "k230" and device.node_type != NodeType.k230:
-            raise ValueError("k230 view must originate from K230")
-        if detection.source_view == "main" and device.node_type != NodeType.orange_pi:
-            raise ValueError("main view must originate from Orange Pi")
-        expected_camera = "camera-main-001" if detection.source_view == "main" else "k230-001"
-        if detection.camera_id != expected_camera:
-            raise ValueError("camera_id does not match the registered source view")
+        if detection.source_view != "k230" or detection.camera_id != "k230-001":
+            raise ValueError("only the K230 camera/source_view is supported; inference identity is device_id")
+        if device.node_type not in {NodeType.k230, NodeType.orange_pi}:
+            raise ValueError("visual inference must originate from K230 or Orange Pi")
         if self.db.get_json_event("detections", detection.event_id):
             duplicate = detection.model_copy(update={
                 "ingest_time": now,
@@ -309,9 +315,9 @@ class SentinelHub:
             self.detections.append(detection)
             self.detections = self.detections[-50:]
             if quality in {Quality.valid, Quality.simulated}:
-                previous = self._latest_detections.get(detection.source_view)
+                previous = self._latest_detections.get(detection.device_id)
                 if previous is None or detection.event_time >= previous.event_time:
-                    self._latest_detections[detection.source_view] = detection
+                    self._latest_detections[detection.device_id] = detection
                 self._set_device_heartbeat(detection.device_id, detection.event_time, detection.source_mode)
                 self.devices[detection.device_id] = self.devices[detection.device_id].model_copy(update={"model_version": detection.model_version})
         await self._publish({"type": "detection", "data": detection.model_dump(mode="json")})
@@ -321,7 +327,7 @@ class SentinelHub:
             site_id=self.settings.site_id,
             event_type="vision_detection",
             severity="warning" if detection.target in {"fire", "smoke"} else "info",
-            title=f"{detection.source_view.upper()} 视角检测到{detection.target}",
+            title=f"{'Orange Pi AI 推理' if device.node_type == NodeType.orange_pi else 'K230'}检测到{detection.target}",
             message=f"置信度 {detection.confidence:.0%} · 模型 {detection.model_version}",
             source_device_id=detection.device_id,
             quality=detection.quality,
@@ -398,6 +404,35 @@ class SentinelHub:
     async def add_event(self, event: EventRecord) -> EventRecord:
         self.db.insert_json("events", "event_id", event.event_id, event.model_dump(mode="json"), "occurred_at", event.occurred_at)
         await self._publish({"type": "event", "data": event.model_dump(mode="json")})
+        return event
+
+    async def ingest_safety_signal(self, signal: SafetySignal, kind: str) -> EventRecord:
+        if signal.site_id != self.settings.site_id or signal.source_mode != self.source_mode:
+            raise ValueError("site or source mode does not match current environment")
+        device = self.devices.get(signal.source_device_id)
+        if device is None or device.site_id != signal.site_id:
+            raise ValueError("source device is not registered for this site")
+        if signal.quality not in ({Quality.simulated} if self.settings.simulation_mode else {Quality.valid}):
+            raise ValueError("signal quality does not match current environment")
+        age = (now_utc() - signal.occurred_at).total_seconds()
+        if age > self.settings.stale_after_seconds or age < -self.settings.clock_tolerance_seconds:
+            raise ValueError("signal timestamp is stale or in the future")
+        payload = {
+            "schema_version": "1.0", "kind": kind, "category": signal.category,
+            "rule_id": signal.rule_id, "model_version": signal.model_version,
+            "confidence": signal.confidence, "evidence": signal.evidence,
+        }
+        event = EventRecord(
+            event_id=signal.event_id, site_id=signal.site_id, event_type=kind,
+            severity=signal.severity, title=signal.title, message=signal.message,
+            source_device_id=signal.source_device_id, quality=signal.quality,
+            source_mode=signal.source_mode, occurred_at=signal.occurred_at,
+            correlation_id=signal.correlation_id, payload=payload,
+        )
+        stored, inserted = self.db.insert_safety_event(event.model_dump(mode="json"))
+        event = EventRecord.model_validate(stored)
+        if inserted:
+            await self._publish({"type": "event", "data": event.model_dump(mode="json")})
         return event
 
     async def add_transition(self, new_state: BusinessState, reason: str, evidence: dict[str, Any]) -> StateTransition | None:
@@ -601,12 +636,13 @@ class SentinelHub:
             ("esp32-s3-001", metric) not in self.latest_by_source or not self._fresh_and_usable(self.latest_by_source[("esp32-s3-001", metric)], now)
             for metric in ("temperature", "humidity", "light")
         )
-        missing_vision = any(view not in self._latest_detections or not self._fresh_and_usable(self._latest_detections[view], now) for view in ("main", "k230"))
+        inference = self._latest_detections.get("orange-pi-001")
+        missing_vision = inference is None or not self._fresh_and_usable(inference, now) or self._freshness(self.devices["k230-001"], now).status != DeviceStatus.online
         delayed = [device for device in devices if device.status == DeviceStatus.delayed]
         if offline or delayed:
             mode, message = SystemMode.degraded, f"{len(offline)} 个节点离线/未连接，{len(delayed)} 个节点心跳延迟；当前业务状态不代表数据完整"
         elif missing_environment or missing_vision:
-            mode, message = SystemMode.incomplete, "环境或双路视觉数据缺失/过期；不能视为完整现场结论"
+            mode, message = SystemMode.incomplete, "环境、K230 采集或香橙派 AI 推理数据缺失/过期；不能视为完整现场结论"
         else:
             mode, message = SystemMode.normal, "所有已登记数据源在线"
         scope = {"site_id": self.settings.site_id, "source_mode": self.source_mode.value}
@@ -676,16 +712,16 @@ class SentinelHub:
                 source_mode=SourceMode.simulated,
             ))
         # Simulated heartbeats demonstrate all-node health without claiming hardware exists.
-        for device_id in ("orange-pi-001", "k230-001", "camera-main-001", "actuator-001"):
+        for device_id in ("orange-pi-001", "k230-001", "actuator-001"):
             self._set_device_heartbeat(device_id)
         self._simulation_tick += 1
         detection_due = self._simulation_tick % 2 == 1
         if detection_due:
             target = "fire" if heat_phase else "smoke" if alert_phase else "person" if 12 <= cycle < 19 else "none"
             confidence = (0.88 + 0.04 * math.sin(seconds)) if heat_phase else (0.68 if alert_phase else 0.0 if target == "none" else 0.81)
-            if True:
+            for inference_device in ("k230-001", "orange-pi-001"):
                 await self.ingest_detection(VisionDetection(
-                    device_id="k230-001",
+                    device_id=inference_device,
                     site_id=self.settings.site_id,
                     camera_id="k230-001",
                     source_view="k230",
@@ -699,23 +735,6 @@ class SentinelHub:
                     sequence=self._simulation_tick,
                     boot_id=self.stream_id,
                 ))
-                if True:
-                    # Mirror an intermittent main-camera inference for the dashboard.
-                    await self.ingest_detection(VisionDetection(
-                        device_id="orange-pi-001",
-                        site_id=self.settings.site_id,
-                        camera_id="camera-main-001",
-                        source_view="main",
-                        target=target,
-                        confidence=round(max(0.0, confidence - 0.08), 3),
-                        bbox=[0.44, 0.24, 0.18, 0.36],
-                        event_time=now,
-                        quality=Quality.simulated,
-                        source_mode=SourceMode.simulated,
-                        model_version="demo-vision-1.0",
-                        sequence=self._simulation_tick,
-                        boot_id=self.stream_id,
-                    ))
         await self.evaluate_state()
         await self._publish({"type": "health", "data": [d.model_dump(mode="json") for d in self.overview().devices]})
 
@@ -740,7 +759,7 @@ class SentinelHub:
 
     async def ingest_frame(self, frame: Frame) -> bool:
         device = self._validate_source(frame.device_id, frame.source_mode)
-        if frame.view not in {"main", "k230"} or f"video-{frame.view}" not in device.capabilities:
+        if frame.view != "k230" or frame.device_id != "k230-001" or "video-k230" not in device.capabilities:
             raise ValueError("video view does not match registered device capability")
         if not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,128}", frame.frame_id):
             raise ValueError("invalid frame_id")
