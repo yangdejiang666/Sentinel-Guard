@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f2f5f8" />
+    <title>智卫 Sentinel · 边缘安全监测平台</title>
+    <link rel="stylesheet" href="/static/console.css?v=single-camera-20261009" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span>S</span></div>
+          <div>
+            <strong>智卫 Sentinel</strong>
+            <small>EDGE SAFETY OS</small>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item active" data-page="overview"><span>◈</span>态势总览</button>
+          <button class="nav-item" data-page="monitor"><span>⌾</span>实时监控</button>
+          <button class="nav-item" data-page="events"><span>△</span>事件中心<i id="event-count">0</i></button>
+          <button class="nav-item" data-page="devices"><span>⬡</span>设备与质量</button>
+          <button class="nav-item" data-page="history"><span>⌁</span>历史数据</button>
+          <button class="nav-item" data-page="integrations"><span>⎋</span>接入与接口</button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="edge-card">
+            <span class="pulse-dot"></span>
+            <div><small>边缘服务</small><strong id="edge-status">连接中</strong></div>
+          </div>
+          <div class="build-info" id="console-build">单摄像头控制台 · 20261009</div>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <button class="mobile-menu" id="mobile-menu" aria-label="打开导航">☰</button>
+          <div>
+          <p class="eyebrow">SENTINEL · EDGE SAFETY CONSOLE</p>
+            <h1 id="page-title">态势总览</h1>
+          </div>
+          <div class="topbar-meta">
+            <div class="clock"><strong id="clock-time">--:--:--</strong><span id="clock-date">----</span></div>
+            <div class="connection-pill" id="connection-pill"><span></span><b>正在连接</b></div>
+          </div>
+        </header>
+
+        <div class="mode-banner" id="mode-banner">
+          <strong>SIMULATION / 模拟数据模式</strong>
+          <span>当前数据用于平台联调，不代表真实现场状态；物理执行器不会被驱动。</span>
+        </div>
+
+        <div class="system-notice" id="system-notice">
+          <span class="notice-icon">i</span><span id="system-message">正在读取系统状态……</span>
+        </div>
+
+        <section class="page active" id="page-overview">
+          <div class="overview-grid">
+            <article class="panel state-hero" id="state-hero">
+              <div class="panel-heading">
+                <div><span class="section-tag">FSM / 权威状态</span><h2>多模态风险状态</h2></div>
+                <span class="live-chip"><i></i>实时计算</span>
+              </div>
+              <div class="state-content">
+                <div class="state-orbit"><div class="orbit-ring ring-a"></div><div class="orbit-ring ring-b"></div><div class="state-core"><span>当前状态</span><strong id="current-state">--</strong><small id="state-duration">等待数据</small></div></div>
+                <div class="state-copy"><p id="state-reason">正在加载状态机证据……</p><div class="evidence-row" id="state-evidence"><span>等待有效数据</span></div><details class="evidence-details"><summary>查看完整决策证据</summary><pre id="state-evidence-json">{}</pre></details></div>
+              </div>
+              <div class="fsm-track" id="fsm-track">
+                <div data-state="NORMAL"><i></i><strong>NORMAL</strong><small>正常巡检</small></div>
+                <span></span><div data-state="WATCH"><i></i><strong>WATCH</strong><small>增强观测</small></div>
+                <span></span><div data-state="ALERT"><i></i><strong>ALERT</strong><small>多模态复核</small></div>
+                <span></span><div data-state="DANGER"><i></i><strong>DANGER</strong><small>闭环干预</small></div>
+              </div>
+            </article>
+
+            <article class="panel sensor-panel">
+              <div class="panel-heading"><div><span class="section-tag">ENVIRONMENT</span><h2>环境实时数据</h2></div><button class="icon-button" data-page-jump="history" title="查看历史">↗</button></div>
+              <div class="sensor-grid">
+                <div class="sensor-card temp"><span class="sensor-icon">T</span><div><small>温度</small><strong><b id="value-temperature">--</b><em>°C</em></strong><span id="quality-temperature" class="quality unknown">等待</span></div></div>
+                <div class="sensor-card humidity"><span class="sensor-icon">H</span><div><small>湿度</small><strong><b id="value-humidity">--</b><em>%</em></strong><span id="quality-humidity" class="quality unknown">等待</span></div></div>
+                <div class="sensor-card light"><span class="sensor-icon">L</span><div><small>光照</small><strong><b id="value-light">--</b><em>lux</em></strong><span id="quality-light" class="quality unknown">等待</span></div></div>
+                <div class="sensor-card confidence"><span class="sensor-icon">AI</span><div><small>最高目标置信度</small><strong><b id="value-confidence">--</b><em>%</em></strong><span id="quality-confidence" class="quality unknown">等待</span></div></div>
+              </div>
+              <div class="freshness"><span>最后刷新</span><strong id="last-refresh">--</strong></div>
+            </article>
+
+            <article class="panel trend-panel">
+              <div class="panel-heading"><div><span class="section-tag">LIVE TELEMETRY</span><h2>多模态趋势与阈值联动</h2></div><span class="info-badge">真实量纲 · 采集时间轴</span></div>
+              <div class="live-chart-grid">
+                <div class="mini-chart"><div class="mini-chart-heading"><span class="temp-dot">温度 / °C</span><small id="trend-quality-temperature">等待数据</small></div><div class="chart-wrap"><canvas id="live-temperature-chart" aria-label="温度实时趋势，单位摄氏度"></canvas><div class="chart-empty" id="temperature-chart-empty">正在积累温度数据……</div></div></div>
+                <div class="mini-chart"><div class="mini-chart-heading"><span class="hum-dot">湿度 / %</span><small id="trend-quality-humidity">等待数据</small></div><div class="chart-wrap"><canvas id="live-humidity-chart" aria-label="湿度实时趋势，单位百分比"></canvas><div class="chart-empty" id="humidity-chart-empty">正在积累湿度数据……</div></div></div>
+                <div class="mini-chart"><div class="mini-chart-heading"><span class="light-dot">光照 / lux</span><small id="trend-quality-light">等待数据</small></div><div class="chart-wrap"><canvas id="live-light-chart" aria-label="光照实时趋势，单位勒克斯"></canvas><div class="chart-empty" id="light-chart-empty">正在积累光照数据……</div></div></div>
+              <div class="mini-chart"><div class="mini-chart-heading"><span>AI 推理置信度 / 0–1</span><small id="current-vision-threshold">阈值 --</small></div><div class="chart-wrap"><canvas id="live-confidence-chart" aria-label="香橙派推理、K230 检测元数据与动态视觉阈值"></canvas><div class="chart-empty" id="confidence-chart-empty">等待有效检测与决策……</div></div><div class="chart-legend confidence-legend"><span class="main-dot">香橙派推理</span><span class="k230-dot">K230 检测</span><span class="threshold-dot">动态阈值</span></div></div>
+              </div>
+              <div class="chart-footer"><span>最近 120 秒 · 环境曲线来自 ESP32-S3 主环境节点</span><span>质量异常或采样中断时断线，不做伪造插值</span></div>
+            </article>
+
+            <article class="panel health-panel">
+              <div class="panel-heading"><div><span class="section-tag">SYSTEM HEALTH</span><h2>节点健康</h2></div><span class="health-score" id="health-score">-- / --</span></div>
+              <div class="device-mini-list" id="device-mini-list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+            </article>
+
+            <article class="panel vision-panel">
+              <div class="panel-heading"><div><span class="section-tag">SINGLE VISION CHANNEL</span><h2>K230 视觉监控</h2></div><button class="icon-button" data-page-jump="monitor">查看监控 ↗</button></div>
+              <div class="feed-grid compact">
+                <div class="camera-feed" data-view="k230"><div class="feed-top"><span>K230 · 唯一视觉采集通道</span><b id="k230-feed-status">等待检测</b></div><div class="feed-stage k230"><div class="feed-label"><span>K230 CAMERA</span><strong>等待视频源</strong></div><canvas class="bbox" id="bbox-k230" aria-hidden="true"></canvas></div><div class="feed-meta" id="feed-meta-k230">等待 K230 视频帧与关联检测事件</div></div>
+              </div>
+            </article>
+
+            <article class="panel timeline-panel">
+              <div class="panel-heading"><div><span class="section-tag">EVIDENCE CHAIN</span><h2>实时事件链</h2></div><button class="icon-button" data-page-jump="events">全部事件 ↗</button></div>
+              <div class="timeline" id="overview-events"><div class="empty-state">等待事件数据</div></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" id="page-monitor">
+          <div class="section-intro"><div><h2>K230 视觉 · 香橙派 AI 推理</h2><p>K230 唯一视觉通道 / Orange Pi 主控与 AI 推理</p></div><span class="warning-badge" id="monitor-mode-badge">正在读取 K230 通道</span></div>
+          <div class="feed-grid monitor-feeds" id="monitor-feeds"></div>
+          <article class="panel table-panel"><div class="panel-heading"><div><span class="section-tag">AI INFERENCE STREAM</span><h2>最新 AI 识别结果</h2></div><span class="live-chip"><i></i>实时更新</span></div><div class="data-table-wrap"><table><thead><tr><th>时间</th><th>推理来源</th><th>目标</th><th>置信度</th><th>模型</th><th>质量</th><th>关联 ID</th></tr></thead><tbody id="detection-table"><tr><td colspan="7" class="table-empty">等待检测事件</td></tr></tbody></table></div></article>
+        </section>
+
+        <section class="page" id="page-events">
+          <div class="section-intro"><div><h2>事件、告警与状态流转</h2><p>从感知、判断到执行回执的完整证据链，所有事件均保留数据来源和质量标记。</p></div><div class="filter-row"><select id="event-filter"><option value="all">全部级别</option><option value="critical">严重</option><option value="warning">警告</option><option value="info">信息</option></select><button class="secondary-button" id="refresh-events">刷新</button></div></div>
+          <div class="event-summary"><div><span>未确认</span><strong id="unacked-count">0</strong></div><div><span>严重事件</span><strong id="critical-count">0</strong></div><div><span>状态流转</span><strong id="transition-count">0</strong></div><div><span>控制回执</span><strong id="command-count">0</strong></div></div>
+          <article class="panel event-center"><div class="timeline expanded" id="all-events"><div class="empty-state">暂无事件</div></div></article>
+          <article class="panel table-panel"><div class="panel-heading"><div><span class="section-tag">FSM TRANSITION AUDIT</span><h2>状态流转与决策依据</h2></div><span class="info-badge">关联 ID 串联检测、决策与执行</span></div><div class="data-table-wrap"><table><thead><tr><th>时间</th><th>流转</th><th>视觉阈值</th><th>规则 / 来源</th><th>原因与证据</th><th>关联 ID</th></tr></thead><tbody id="transition-table"><tr><td colspan="6" class="table-empty">暂无状态流转</td></tr></tbody></table></div></article>
+          <article class="panel table-panel"><div class="panel-heading"><div><span class="section-tag">COMMAND AUDIT</span><h2>执行请求与硬件回执</h2></div><span class="info-badge">未收到 completed 回执时不宣称硬件已动作</span></div><div class="data-table-wrap"><table><thead><tr><th>请求时间</th><th>命令</th><th>状态</th><th>来源</th><th>请求人</th><th>执行说明</th><th>命令 ID</th></tr></thead><tbody id="command-table"><tr><td colspan="7" class="table-empty">暂无命令</td></tr></tbody></table></div></article>
+        </section>
+
+        <section class="page" id="page-devices">
+          <div class="section-intro"><div><h2>设备、连接与数据质量</h2><p>业务风险状态与系统健康状态分开显示；设备离线不会被解释为环境正常。</p></div><span class="info-badge">心跳阈值 <b id="heartbeat-threshold">--</b>s</span></div>
+          <div class="device-card-grid" id="device-card-grid"></div>
+          <article class="panel table-panel"><div class="panel-heading"><div><span class="section-tag">GENERIC TELEMETRY</span><h2>全部最新遥测</h2></div><span class="info-badge">新指标无需改动卡片也可在此呈现</span></div><div class="data-table-wrap"><table><thead><tr><th>指标</th><th>数值</th><th>设备</th><th>采集时间</th><th>时延</th><th>质量</th><th>序号 / Boot ID</th></tr></thead><tbody id="latest-telemetry-table"><tr><td colspan="7" class="table-empty">等待遥测数据</td></tr></tbody></table></div></article>
+          <article class="panel quality-guide"><div class="panel-heading"><div><span class="section-tag">DATA QUALITY</span><h2>数据质量规则</h2></div></div><div class="quality-grid"><div><span class="quality valid">有效</span><p>来自已登记设备，字段、时间和值域均通过检查。</p></div><div><span class="quality simulated">模拟</span><p>只用于界面和链路联调，不能作为现场结论。</p></div><div><span class="quality stale">过期</span><p>保留最后读数，但不再视为实时输入。</p></div><div><span class="quality estimated">估算</span><p>可以审计和展示，但不参与安全状态判断。</p></div><div><span class="quality invalid">无效</span><p>格式、时钟、顺序或数值异常，不进入实时判断。</p></div></div></article>
+        </section>
+
+        <section class="page" id="page-history">
+          <div class="section-intro"><div><h2>历史遥测与审计查询</h2><p>曲线保留采集时间、来源和质量状态；无效、估算和过期输入不连成有效曲线。不同设备独立成线。</p></div><div class="filter-row"><select id="history-metric" aria-label="历史指标"><option value="temperature">温度</option><option value="humidity">湿度</option><option value="light">光照</option></select><select id="history-device" aria-label="历史设备"><option value="">全部设备</option></select><select id="history-source" aria-label="历史数据来源"><option value="">当前运行来源</option><option value="live">真实历史</option><option value="simulated">模拟历史</option><option value="replay">回放历史</option></select><button class="secondary-button" id="refresh-history">查询</button></div></div>
+          <article class="panel history-chart-panel"><div class="panel-heading"><div><span class="section-tag">HISTORICAL DATA</span><h2 id="history-title">温度历史</h2></div><span class="info-badge">最近 120 条</span></div><div class="chart-wrap history"><canvas id="history-chart"></canvas><div class="chart-empty" id="history-empty">暂无历史数据</div></div></article>
+          <article class="panel table-panel"><div class="data-table-wrap"><table><thead><tr><th>采集 / 接收时间</th><th>设备</th><th>数值</th><th>质量 / 原因</th><th>来源</th><th>序号 / Boot ID</th><th>事件 ID</th></tr></thead><tbody id="history-table"></tbody></table></div></article>
+        </section>
+
+        <section class="page" id="page-integrations">
+          <div class="section-intro"><div><h2>硬件与 AI 板卡接入</h2><p>真实设备只需将厂商报文标准化为统一契约；前端无需感知 MQTT、GPIO 或板卡 SDK。</p></div><span class="warning-badge">执行器接入前须完成安全评估与硬件联锁</span></div>
+          <div class="integration-grid">
+            <article class="panel contract-panel"><div class="panel-heading"><div><span class="section-tag">UNIFIED CONTRACT</span><h2>统一遥测契约</h2></div></div><pre id="contract-example">{
+  "eventId": "evt-uuid",
+  "schemaVersion": "1.0",
+  "siteId": "demo-site",
+  "deviceId": "esp32-s3-001",
+  "nodeType": "ESP32-S3",
+  "channel": "environment",
+  "metric": "temperature",
+  "value": 23.6,
+  "unit": "°C",
+  "eventTime": "ISO-8601 UTC",
+  "sequence": 1001,
+  "bootId": "unique-boot-id",
+  "quality": "valid",
+  "sourceMode": "live"
+}</pre></article>
+            <article class="panel endpoint-panel"><div class="panel-heading"><div><span class="section-tag">RESERVED INTERFACES</span><h2>预留接入接口</h2></div></div><div class="endpoint-list"><div><b>POST</b><code>/api/v1/ingest/telemetry</code><span>ESP32 / 传感器数据</span></div><div><b>POST</b><code>/api/v1/ingest/detections</code><span>视觉检测 / Orange Pi AI 推理结果</span></div><div><b>POST</b><code>/api/v1/ingest/heartbeat</code><span>设备存活与 Boot ID</span></div><div><b>POST</b><code>/api/v1/ingest/video/k230</code><span>唯一 K230 视觉 JPEG 预览帧</span></div><div><b>POST</b><code>/api/v1/ingest/command-feedback</code><span>执行器确认、完成或失败回执</span></div><div><b>WS</b><code>/ws</code><span>浏览器实时订阅与权威快照</span></div><div><b>POST</b><code>/api/v1/commands</code><span>受控执行请求</span></div><div><b>GET</b><code>/docs</code><span>OpenAPI 在线文档</span></div></div></article>
+            <article class="panel command-panel"><div class="panel-heading"><div><span class="section-tag">CONTROLLED COMMAND</span><h2>受控执行请求</h2></div></div><p id="command-safety-copy">模拟模式只写入命令与审计记录，不会驱动物理 GPIO。真实模式还要求控制令牌、物理执行安全开关、适配器在线和硬件完成回执。</p><div class="command-buttons"><button data-command="alarm_on">请求声光报警</button><button data-command="fan_on">请求执行器启动</button><button data-command="reset" class="secondary">请求系统复位</button></div><div class="last-command" id="last-command">尚未发送执行请求</div></article>
+            <article class="panel config-panel"><div class="panel-heading"><div><span class="section-tag">RUNTIME CONFIG</span><h2>平台运行配置</h2></div></div><dl class="config-grid" id="config-grid"><div><dt>站点</dt><dd>--</dd></div><div><dt>规则版本</dt><dd>--</dd></div><div><dt>MQTT</dt><dd>--</dd></div><div><dt>视觉阈值</dt><dd>--</dd></div><div><dt>物理执行</dt><dd>--</dd></div><div><dt>本地 Fallback</dt><dd>--</dd></div></dl></article>
+            <article class="panel token-panel"><div class="panel-heading"><div><span class="section-tag">OPERATOR TOKEN</span><h2>操作员控制令牌</h2></div></div><p>服务端配置了控制令牌时需要；真实模式必须配置。令牌只保存在当前浏览器标签页，不写入数据库或页面日志。</p><label for="control-token">X-Control-Token</label><div class="token-row"><input id="control-token" type="password" autocomplete="off" placeholder="输入控制令牌" /><button id="save-control-token" type="button">应用</button><button id="clear-control-token" type="button" class="secondary-button">清除</button></div><small id="token-status">当前未配置浏览器控制令牌</small></article>
+            <article class="panel adapter-panel"><div class="panel-heading"><div><span class="section-tag">ADAPTER BOUNDARY</span><h2>接入节点</h2></div></div><ol><li><b>ESP32-S3：</b>温湿度、光照和心跳。</li><li><b>K230：</b>唯一摄像头与视觉采集。</li><li><b>Orange Pi：</b>主控、AI 推理、模型与检测结果。</li><li><b>执行器：</b>确认、执行、超时和失败回执。</li></ol></article>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+    <script src="/static/app.js?v=single-camera-20261009" defer></script>
+  </body>
+</html>

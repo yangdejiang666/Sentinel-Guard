@@ -1,0 +1,13 @@
+{
+  "name": "sentinel-guard-browser-tests",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Development-only browser validation. The frontend has no build dependencies.",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "check": "node --check frontend/app.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
+  }
+}
