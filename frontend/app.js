@@ -171,11 +171,477 @@ function setConnection(connected) {
   if (!pill) return;
   pill.classList.toggle('online', connected);
   pill.classList.toggle('offline', !connected);
-  pill.querySelector('b').textContent = connected ? '实时已连接' : '连接中断';
-  if (edge) edge.textContent = connected ? '实时服务正常' : '等待重连';
+  pill.querySelector('b').textContent = connected ? (mockEngine.active ? '在线演示 · 实时模拟' : '实时已连接') : '连接中断';
+  if (edge) edge.textContent = connected ? (mockEngine.active ? '模拟引擎正常' : '实时服务正常') : '等待重连';
+}
+
+const isStandaloneDemo = window.location.hostname.endsWith('github.io') ||
+  window.location.protocol === 'file:' ||
+  new URLSearchParams(window.location.search).has('mock');
+
+const mockEngine = {
+  active: false,
+  timer: null,
+  tick: 0,
+  simState: 'NORMAL',
+  stateSince: new Date().toISOString(),
+  devices: [
+    { device_id: 'orange-pi-001', display_name: 'Orange Pi 主控与 AI 推理', node_type: 'Orange Pi 3B', status: 'online', protocol: 'local', capabilities: ['fsm', 'api', 'gpio', 'video-decode', 'vision-detection', 'heartbeat'], firmware_version: 'sim-1.0', model_version: 'demo-vision-1.0', source_mode: 'simulated', health_message: 'RKNN NPU AI 推理正常 · 周期监测中' },
+    { device_id: 'k230-001', display_name: 'K230 唯一视觉采集节点', node_type: 'K230', status: 'online', protocol: 'MQTT', capabilities: ['vision-detection', 'video-k230', 'heartbeat'], firmware_version: 'sim-1.0', model_version: 'demo-vision-1.0', source_mode: 'simulated', health_message: '视觉采集正常 · 帧率 30fps' },
+    { device_id: 'esp32-s3-001', display_name: 'ESP32-S3 环境网关', node_type: 'ESP32-S3', status: 'online', protocol: 'MQTT', capabilities: ['temperature', 'humidity', 'light', 'heartbeat'], firmware_version: 'sim-1.0', source_mode: 'simulated', health_message: '温湿度/光照采样正常' },
+    { device_id: 'actuator-001', display_name: '声光与继电器执行组', node_type: 'Actuator', status: 'online', protocol: 'GPIO / isolated relay', capabilities: ['alarm', 'fan', 'execution-feedback'], firmware_version: 'sim-1.0', source_mode: 'simulated', health_message: '安全联锁与执行器就绪' },
+  ],
+  events: [
+    {
+      event_id: 'evt-init-001',
+      site_id: 'demo-site',
+      event_type: 'industrial_alert',
+      severity: 'critical',
+      title: '高温与火情风险已受控抑制',
+      message: '上一测试周期检测到模拟明火并触发声光联锁，环境已降温恢复。',
+      occurred_at: new Date(Date.now() - 65000).toISOString(),
+      acknowledged: true,
+      acknowledged_by: 'system-auto',
+      acknowledged_at: new Date(Date.now() - 40000).toISOString(),
+      handling_status: 'closed',
+      quality: 'simulated',
+      source_mode: 'simulated',
+      source_device_id: 'orange-pi-001',
+      correlation_id: 'corr-init-001',
+      payload: { rule_id: 'safety-rule-v2.1', model_version: 'demo-vision-1.0', target: 'fire', confidence: 0.94 },
+    },
+    {
+      event_id: 'evt-init-002',
+      site_id: 'demo-site',
+      event_type: 'anomaly',
+      severity: 'warning',
+      title: '环境光照突变与疑似人员靠近',
+      message: 'K230 画面中识别到人员活动，光照值突降至 15 lux。',
+      occurred_at: new Date(Date.now() - 130000).toISOString(),
+      acknowledged: false,
+      handling_status: 'open',
+      quality: 'simulated',
+      source_mode: 'simulated',
+      source_device_id: 'orange-pi-001',
+      correlation_id: 'corr-init-002',
+      payload: { rule_id: 'safety-rule-v2.1', model_version: 'demo-vision-1.0', target: 'person', confidence: 0.82 },
+    },
+    {
+      event_id: 'evt-init-003',
+      site_id: 'demo-site',
+      event_type: 'anomaly',
+      severity: 'info',
+      title: '边缘主控与节点开机自检',
+      message: 'Orange Pi 3B、K230 视觉与 ESP32-S3 通信就绪，时钟同步完成。',
+      occurred_at: new Date(Date.now() - 300000).toISOString(),
+      acknowledged: true,
+      acknowledged_by: 'admin',
+      acknowledged_at: new Date(Date.now() - 290000).toISOString(),
+      handling_status: 'closed',
+      quality: 'simulated',
+      source_mode: 'simulated',
+      source_device_id: 'orange-pi-001',
+      correlation_id: 'corr-init-003',
+      payload: { rule_id: 'system-boot' },
+    },
+  ],
+  detections: [],
+  transitions: [
+    {
+      correlation_id: 'trans-init-001',
+      from_state: 'WATCH',
+      to_state: 'NORMAL',
+      reason: '环境温度恢复正常且人员已离开监控区域',
+      evidence: { temperature: 23.4, person: false },
+      occurred_at: new Date(Date.now() - 60000).toISOString(),
+      vision_threshold: 0.8,
+      source_mode: 'simulated',
+    },
+  ],
+  commands: [
+    {
+      command_id: 'cmd-init-001',
+      command_type: 'reset',
+      status: 'completed',
+      source_mode: 'simulated',
+      requested_by: 'system-fsm',
+      execution_message: '执行器复位完成 (回执正常)',
+      requested_at: new Date(Date.now() - 58000).toISOString(),
+    },
+  ],
+};
+
+function getSimStateReason(st) {
+  if (st === 'DANGER') return '确认明火险情，环境温度极高，声光联锁已激活';
+  if (st === 'ALERT') return '疑似烟雾特征且环境温度偏高，进入预警警戒状态';
+  if (st === 'WATCH') return '发现可疑人员活动或环境光照异常突降';
+  return '环境指标与视觉检测均在安全阈值范围内';
+}
+
+function getSimStateEvidence(st) {
+  if (st === 'DANGER') return { target: 'fire', confidence: 0.94, temperature: 58.2, smoke: true };
+  if (st === 'ALERT') return { target: 'smoke', confidence: 0.76, temperature: 38.6, person: false };
+  if (st === 'WATCH') return { target: 'person', confidence: 0.83, light: 15.0 };
+  return { target: 'none', temperature: 23.4, humidity: 54.0, light: 440.0 };
+}
+
+function generateMockHistory(metric) {
+  const points = [];
+  const now = Date.now();
+  for (let i = 60; i >= 0; i--) {
+    const t = new Date(now - i * 1000).toISOString();
+    let val = 24;
+    const cycle = (60 - i) % 48;
+    const isHeat = cycle >= 26 && cycle < 36;
+    const isAlert = cycle >= 20 && cycle < 26;
+    const isPerson = cycle >= 12 && cycle < 20;
+    if (metric === 'temperature') {
+      val = isHeat ? (55 + 3 * Math.sin(i)) : isAlert ? (38 + 1.5 * Math.sin(i)) : isPerson ? (27 + Math.sin(i)) : (23 + 0.8 * Math.sin(i / 5));
+    } else if (metric === 'humidity') {
+      val = isHeat ? (32 + Math.sin(i)) : isAlert ? (40 + Math.sin(i)) : (52 + 2 * Math.cos(i / 4));
+    } else if (metric === 'light') {
+      val = isPerson ? 15 : isHeat ? (620 + 30 * Math.sin(i)) : (430 + 20 * Math.sin(i / 3));
+    }
+    points.push({
+      device_id: 'esp32-s3-001',
+      site_id: 'demo-site',
+      channel: 'environment',
+      metric,
+      value: Math.round(val * 10) / 10,
+      unit: metric === 'temperature' ? '°C' : metric === 'humidity' ? '%' : 'lux',
+      event_time: t,
+      sequence: 1000 + (60 - i),
+      quality: 'simulated',
+      source_mode: 'simulated',
+    });
+  }
+  return points;
+}
+
+function mockOverview() {
+  const now = new Date();
+  const cycle = mockEngine.tick % 48;
+  const isHeat = cycle >= 26 && cycle < 36;
+  const isAlert = cycle >= 20 && cycle < 26;
+  const isPerson = cycle >= 12 && cycle < 20;
+  const temp = isHeat ? (55.0 + 3.0 * Math.sin(mockEngine.tick)) : isAlert ? (38.0 + 1.5 * Math.sin(mockEngine.tick)) : isPerson ? (27.2 + 0.8 * Math.sin(mockEngine.tick)) : (23.2 + 0.6 * Math.sin(mockEngine.tick / 3));
+  const humidity = isHeat ? (32.0 + Math.sin(mockEngine.tick)) : isAlert ? (39.0 + Math.sin(mockEngine.tick)) : (52.0 + 2.0 * Math.cos(mockEngine.tick / 4));
+  const light = isPerson ? 12.0 : isHeat ? (620.0 + 20 * Math.sin(mockEngine.tick)) : (430.0 + 15 * Math.sin(mockEngine.tick / 2));
+
+  const latestTelemetry = [
+    { device_id: 'esp32-s3-001', site_id: 'demo-site', metric: 'temperature', value: Math.round(temp * 10) / 10, unit: '°C', event_time: now.toISOString(), quality: 'simulated', source_mode: 'simulated' },
+    { device_id: 'esp32-s3-001', site_id: 'demo-site', metric: 'humidity', value: Math.round(humidity * 10) / 10, unit: '%', event_time: now.toISOString(), quality: 'simulated', source_mode: 'simulated' },
+    { device_id: 'esp32-s3-001', site_id: 'demo-site', metric: 'light', value: Math.round(light), unit: 'lux', event_time: now.toISOString(), quality: 'simulated', source_mode: 'simulated' },
+  ];
+
+  return {
+    app_name: '智卫 Sentinel · 边缘安全监测平台',
+    site_id: 'demo-site',
+    simulation_mode: true,
+    current_state: mockEngine.simState,
+    state_since: mockEngine.stateSince,
+    state_reason: getSimStateReason(mockEngine.simState),
+    state_trusted: true,
+    system_mode: 'NORMAL',
+    system_message: '所有已登记数据源在线 (纯前端在线演示)',
+    generated_at: now.toISOString(),
+    stream_id: 'sim-demo-stream',
+    stream_sequence: mockEngine.tick,
+    rules: { version: 'safety-rule-v2.1', normal_vision_threshold: 0.8, alert_vision_threshold: 0.65 },
+    vision_threshold: ['ALERT', 'DANGER'].includes(mockEngine.simState) ? 0.65 : 0.8,
+    devices: mockEngine.devices,
+    latest_telemetry: latestTelemetry,
+    latest_detections: mockEngine.detections.slice(0, 5),
+    active_events: mockEngine.events.filter((e) => !e.acknowledged).slice(0, 10),
+    recent_transitions: mockEngine.transitions.slice(0, 10),
+    latest_commands: mockEngine.commands.slice(0, 10),
+    fallback_active: false,
+    state_evidence: getSimStateEvidence(mockEngine.simState),
+    mqtt_status: 'connected',
+    local_fallback_ready: true,
+    video_channels: [
+      { channel_id: 'ch-k230', source_view: 'k230', device_id: 'k230-001', status: 'online', frame_id: `f-k230-${mockEngine.tick}`, event_time: now.toISOString(), source_mode: 'simulated' },
+    ],
+  };
+}
+
+async function mockApi(path, options = {}) {
+  const url = new URL(path, 'http://localhost');
+  const pathname = url.pathname;
+  if (pathname === '/api/v1/config') {
+    return {
+      heartbeat_timeout_seconds: 15,
+      stale_after_seconds: 5,
+      allow_actuation: false,
+      auto_actuation: false,
+      control_token_required: false,
+      rules: { version: 'safety-rule-v2.1' },
+      site_id: 'demo-site',
+    };
+  }
+  if (pathname === '/api/v1/overview') {
+    return mockOverview();
+  }
+  if (pathname === '/api/v1/events') {
+    return mockEngine.events.slice(0, 100);
+  }
+  if (pathname === '/api/v1/events/search') {
+    const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+    const severity = url.searchParams.get('severity') || 'all';
+    const status = url.searchParams.get('acknowledgement') || 'all';
+    const kind = url.searchParams.get('kind') || 'all';
+    const handling = url.searchParams.get('handling') || 'all';
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const pageSize = Math.max(1, Number(url.searchParams.get('page_size') || 20));
+
+    const items = mockEngine.events.filter((item) => {
+      if (severity !== 'all' && item.severity !== severity) return false;
+      if (status !== 'all' && item.acknowledged !== (status === 'acknowledged')) return false;
+      if (handling !== 'all' && (item.handling_status || 'open') !== handling) return false;
+      if (kind !== 'all') {
+        if (kind === 'other') {
+          if (['anomaly', 'industrial_alert'].includes(item.event_type)) return false;
+        } else if (item.event_type !== kind) return false;
+      }
+      if (q && ![item.title, item.message, item.event_id, item.source_device_id].join(' ').toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const total = items.length;
+    const start = (page - 1) * pageSize;
+    return { items: items.slice(start, start + pageSize), total, page, page_size: pageSize };
+  }
+  if (pathname.includes('/acknowledge')) {
+    const parts = pathname.split('/');
+    const eventId = decodeURIComponent(parts[parts.indexOf('events') + 1] || '');
+    const found = mockEngine.events.find((e) => e.event_id === eventId);
+    if (found) {
+      found.acknowledged = true;
+      found.acknowledged_by = 'dashboard-operator';
+      found.acknowledged_at = new Date().toISOString();
+      found.revision = (found.revision || 0) + 1;
+      return found;
+    }
+    return { event_id: eventId, acknowledged: true };
+  }
+  if (pathname.includes('/actions')) {
+    const parts = pathname.split('/');
+    const eventId = decodeURIComponent(parts[parts.indexOf('events') + 1] || '');
+    const body = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || {});
+    const found = mockEngine.events.find((e) => e.event_id === eventId);
+    if (found) {
+      const nextStatus = ({ claim: 'in_progress', note: found.handling_status, submit_review: 'pending_review', close: 'closed', reopen: 'open' })[body.action] || found.handling_status;
+      found.handling_status = nextStatus;
+      found.handling_history = found.handling_history || [];
+      found.handling_history.push({ action: body.action, actor: body.actor, note: body.note, at: new Date().toISOString() });
+      found.revision = (found.revision || 0) + 1;
+      return found;
+    }
+    return { event_id: eventId, handling_status: 'in_progress' };
+  }
+  if (pathname === '/api/v1/detections') {
+    return mockEngine.detections.slice(0, 100);
+  }
+  if (pathname === '/api/v1/state/transitions') {
+    return mockEngine.transitions.slice(0, 100);
+  }
+  if (pathname === '/api/v1/commands') {
+    if (options.method === 'POST') {
+      const body = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || {});
+      const cmd = {
+        command_id: `cmd-${Date.now()}`,
+        command_type: body.command_type,
+        status: 'completed',
+        source_mode: 'simulated',
+        requested_by: body.requested_by || 'dashboard-operator',
+        execution_message: '在线演示模拟执行成功 (执行回执正常)',
+        requested_at: new Date().toISOString(),
+      };
+      mockEngine.commands.unshift(cmd);
+      return cmd;
+    }
+    return mockEngine.commands.slice(0, 100);
+  }
+  if (pathname === '/api/v1/telemetry/history') {
+    const metric = url.searchParams.get('metric') || 'temperature';
+    return generateMockHistory(metric);
+  }
+  return {};
+}
+
+function startStandaloneSimulation() {
+  if (mockEngine.active) return;
+  mockEngine.active = true;
+  setConnection(true);
+  const pill = $('#connection-pill');
+  if (pill) pill.querySelector('b').textContent = '在线演示 · 实时模拟';
+  const edge = $('#edge-status');
+  if (edge) edge.textContent = '模拟引擎正常';
+  const buildInfo = $('#console-build');
+  if (buildInfo) buildInfo.textContent = '单摄像头安全控制台 · 在线演示版';
+
+  resyncData('standalone-demo');
+  loadHistory($('#history-metric')?.value || 'temperature');
+
+  if (mockEngine.timer) clearInterval(mockEngine.timer);
+  mockEngine.timer = setInterval(mockTick, 1000);
+}
+
+function mockTick() {
+  if (!mockEngine.active) return;
+  mockEngine.tick++;
+  const now = new Date();
+  const cycle = mockEngine.tick % 48;
+  const isHeat = cycle >= 26 && cycle < 36;
+  const isAlert = cycle >= 20 && cycle < 26;
+  const isPerson = cycle >= 12 && cycle < 20;
+
+  const targetState = isHeat ? 'DANGER' : isAlert ? 'ALERT' : isPerson ? 'WATCH' : 'NORMAL';
+
+  const temp = isHeat ? (55.0 + 3.0 * Math.sin(mockEngine.tick)) : isAlert ? (38.0 + 1.5 * Math.sin(mockEngine.tick)) : isPerson ? (27.2 + 0.8 * Math.sin(mockEngine.tick)) : (23.2 + 0.6 * Math.sin(mockEngine.tick / 3));
+  const humidity = isHeat ? (32.0 + Math.sin(mockEngine.tick)) : isAlert ? (39.0 + Math.sin(mockEngine.tick)) : (52.0 + 2.0 * Math.cos(mockEngine.tick / 4));
+  const light = isPerson ? 12.0 : isHeat ? (620.0 + 20 * Math.sin(mockEngine.tick)) : (430.0 + 15 * Math.sin(mockEngine.tick / 2));
+
+  [
+    { metric: 'temperature', value: Math.round(temp * 10) / 10, unit: '°C' },
+    { metric: 'humidity', value: Math.round(humidity * 10) / 10, unit: '%' },
+    { metric: 'light', value: Math.round(light), unit: 'lux' },
+  ].forEach((item) => {
+    handleRealtime({
+      type: 'telemetry',
+      stream_id: 'sim-demo-stream',
+      stream_sequence: mockEngine.tick,
+      data: {
+        device_id: 'esp32-s3-001',
+        site_id: 'demo-site',
+        channel: 'environment',
+        metric: item.metric,
+        value: item.value,
+        unit: item.unit,
+        event_time: now.toISOString(),
+        quality: 'simulated',
+        source_mode: 'simulated',
+      },
+    });
+  });
+
+  if (mockEngine.tick % 2 === 1) {
+    const target = isHeat ? 'fire' : isAlert ? 'smoke' : isPerson ? 'person' : 'none';
+    const conf = isHeat ? 0.94 : isAlert ? 0.76 : isPerson ? 0.83 : 0.05;
+    const bbox = isHeat ? [0.32, 0.20, 0.36, 0.42] : isAlert ? [0.28, 0.16, 0.35, 0.32] : isPerson ? [0.38, 0.22, 0.24, 0.48] : [0, 0, 0, 0];
+    const detection = {
+      event_id: `det-${mockEngine.tick}`,
+      device_id: 'orange-pi-001',
+      site_id: 'demo-site',
+      camera_id: 'k230-001',
+      source_view: 'k230',
+      target,
+      confidence: conf,
+      bbox,
+      event_time: now.toISOString(),
+      quality: 'simulated',
+      source_mode: 'simulated',
+      model_version: 'demo-vision-1.0',
+    };
+    mockEngine.detections.unshift(detection);
+    if (mockEngine.detections.length > 100) mockEngine.detections.pop();
+    handleRealtime({
+      type: 'detection',
+      stream_id: 'sim-demo-stream',
+      stream_sequence: mockEngine.tick,
+      data: detection,
+    });
+  }
+
+  if (targetState !== mockEngine.simState) {
+    const fromState = mockEngine.simState;
+    mockEngine.simState = targetState;
+    mockEngine.stateSince = now.toISOString();
+    const reason = getSimStateReason(targetState);
+    const visionThreshold = ['ALERT', 'DANGER'].includes(targetState) ? 0.65 : 0.8;
+
+    const transition = {
+      correlation_id: `trans-${Date.now()}`,
+      from_state: fromState,
+      to_state: targetState,
+      reason,
+      evidence: getSimStateEvidence(targetState),
+      occurred_at: now.toISOString(),
+      vision_threshold: visionThreshold,
+      source_mode: 'simulated',
+    };
+    mockEngine.transitions.unshift(transition);
+    if (mockEngine.transitions.length > 50) mockEngine.transitions.pop();
+
+    handleRealtime({
+      type: 'state_transition',
+      stream_id: 'sim-demo-stream',
+      stream_sequence: mockEngine.tick,
+      data: transition,
+    });
+
+    if (targetState === 'ALERT' || targetState === 'DANGER') {
+      const isDanger = targetState === 'DANGER';
+      const evt = {
+        event_id: `evt-${Date.now()}`,
+        site_id: 'demo-site',
+        event_type: isDanger ? 'industrial_alert' : 'anomaly',
+        severity: isDanger ? 'critical' : 'warning',
+        title: isDanger ? '确认明火险情与紧急预警' : '疑似烟雾特征与温度突增',
+        message: isDanger ? 'Orange Pi AI 检测到火情置信度 94%，ESP32 温度 58°C' : 'Orange Pi AI 检测到烟雾置信度 76%，ESP32 温度 38°C',
+        occurred_at: now.toISOString(),
+        acknowledged: false,
+        quality: 'simulated',
+        source_mode: 'simulated',
+        source_device_id: 'orange-pi-001',
+        correlation_id: transition.correlation_id,
+        handling_status: 'open',
+        payload: { rule_id: 'safety-rule-v2.1', model_version: 'demo-vision-1.0', target: isDanger ? 'fire' : 'smoke', confidence: isDanger ? 0.94 : 0.76 },
+      };
+      mockEngine.events.unshift(evt);
+      if (mockEngine.events.length > 100) mockEngine.events.pop();
+
+      handleRealtime({
+        type: 'event',
+        stream_id: 'sim-demo-stream',
+        stream_sequence: mockEngine.tick,
+        data: evt,
+      });
+
+      if (isDanger) {
+        const cmd = {
+          command_id: `cmd-${Date.now()}`,
+          command_type: 'alarm_on',
+          status: 'completed',
+          source_mode: 'simulated',
+          requested_by: 'system-fsm',
+          execution_message: '紧急声光报警驱动回执已完成 (模拟)',
+          requested_at: now.toISOString(),
+        };
+        mockEngine.commands.unshift(cmd);
+        if (mockEngine.commands.length > 50) mockEngine.commands.pop();
+
+        handleRealtime({
+          type: 'command',
+          stream_id: 'sim-demo-stream',
+          stream_sequence: mockEngine.tick,
+          data: cmd,
+        });
+      }
+    }
+  }
+
+  if (mockEngine.tick % 5 === 0) {
+    handleRealtime({
+      type: 'health',
+      data: mockEngine.devices,
+    });
+  }
 }
 
 async function api(path, options = {}) {
+  if (mockEngine.active) {
+    return mockApi(path, options);
+  }
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   if (!response.ok) {
     const detail = await response.text();
@@ -693,9 +1159,13 @@ async function resyncData(reason = '') {
     $('#heartbeat-threshold').textContent = config.heartbeat_timeout_seconds;
     state.needsResync = false;
     if (state.page === 'events') scheduleEventPage();
-    if (reason) showToast('实时数据与审计记录已重新同步');
+    if (reason && reason !== 'standalone-demo') showToast('实时数据与审计记录已重新同步');
   })().catch((error) => {
     state.needsResync = true;
+    if (!mockEngine.active && (window.location.protocol === 'file:' || error.message.includes('Failed to fetch') || error.message.includes('404') || error.message.includes('NetworkError'))) {
+      startStandaloneSimulation();
+      return;
+    }
     showToast(`数据同步失败：${error.message}`, 'error');
   }).finally(() => { state.resyncPromise = null; });
   return state.resyncPromise;
@@ -836,13 +1306,14 @@ function handleRealtime(message) {
 }
 
 function connectWebSocket() {
+  if (mockEngine.active) return;
   if (state.socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(state.socket.readyState)) return;
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   state.socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
   state.socket.addEventListener('open', () => { setConnection(true); if (state.reconnectTimer) clearTimeout(state.reconnectTimer); });
   state.socket.addEventListener('message', (event) => { try { handleRealtime(JSON.parse(event.data)); } catch (error) { console.warn('Invalid realtime message', error); } });
-  state.socket.addEventListener('close', () => { state.needsResync = true; setConnection(false); state.reconnectTimer = setTimeout(connectWebSocket, 1800); });
-  state.socket.addEventListener('error', () => { setConnection(false); });
+  state.socket.addEventListener('close', () => { if (!mockEngine.active) { state.needsResync = true; setConnection(false); state.reconnectTimer = setTimeout(connectWebSocket, 1800); } });
+  state.socket.addEventListener('error', () => { if (!mockEngine.active) setConnection(false); });
 }
 
 async function acknowledgeEvent(eventId) {
@@ -903,7 +1374,11 @@ function bindEvents() {
 document.addEventListener('DOMContentLoaded', () => {
   renderMonitorFeeds(); updateClock(); updateTokenStatus(); bindEvents();
   setInterval(updateClock, 1000);
-  setInterval(() => { if (state.overview) { updateSensors(state.overview); updateDetections(); updateVideoChannels(state.videoChannels); renderLatestTelemetry(state.overview.latest_telemetry || []); redrawLiveChart(); if (state.lastRealtimeAt && Date.now() - state.lastRealtimeAt > 15000) setConnection(false); } }, 1000);
-  loadInitialData(); connectWebSocket();
+  setInterval(() => { if (state.overview) { updateSensors(state.overview); updateDetections(); updateVideoChannels(state.videoChannels); renderLatestTelemetry(state.overview.latest_telemetry || []); redrawLiveChart(); if (!mockEngine.active && state.lastRealtimeAt && Date.now() - state.lastRealtimeAt > 15000) setConnection(false); } }, 1000);
+  if (isStandaloneDemo) {
+    startStandaloneSimulation();
+  } else {
+    loadInitialData(); connectWebSocket();
+  }
 });
 
